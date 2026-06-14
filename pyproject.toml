@@ -1,0 +1,11 @@
+[project]
+name = "stoch-agent-tool"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "openai>=2.41.0",
+    "pyautogui>=0.9.54",
+    "pygetwindow>=0.0.9",
+]
