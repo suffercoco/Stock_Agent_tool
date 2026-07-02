@@ -2,12 +2,17 @@
 """
 step 1: move to specific coordination, then left lick
 step 2: press enter, enter
-step 3: check the time, start get data from 9:30.
-In every 30 mins move to coordination(9:30) then coordiantion(10;00) for on and so forth untill cordination(15:00).
-At each coordination get a screenshot from a specific area.
+step 3: check the current time first -- a slot can only be captured after it has
+        actually happened. For each 30-minute slot (10:00 ... 15:00):
+        wait until the slot time is reached, then sweep ALL stocks for that slot:
+        move to the slot coordination, screenshot the data area, OCR the current
+        stock number from its own area, then click to the next stock and repeat.
+        The stock list is not ordered; seeing the first stock number (600000)
+        again means the lap is complete and we move on to the next slot.
 Step 4: run the screenshot through RapidOCR and pull the two numbers that follow
         the labels 主力净买额 (net buy, normalized to 万) and 占成交额比 (turnover ratio %).
-step 5: save those two numbers with the stoch number as a row in the database
+step 5: save those two numbers keyed by the OCR'd stock number as a row in the
+        database
 
 """
 
@@ -37,6 +42,22 @@ SLOT_COORDS = {
 
 # step 3: the fixed area to screenshot at each slot -> (left, top, width, height)
 SCREENSHOT_REGION = (100, 662, 369, 683)
+
+# step 3: click here to switch to the next stock.
+NEXT_STOCK_COORD = (0, 0)          # TODO fill in for your screen
+
+# step 3: the area showing the current stock number -> (left, top, width, height)
+STOCK_NUMBER_REGION = (0, 0, 0, 0)  # TODO fill in for your screen
+
+# The first stock in the rotation. The list is not in increasing order, so the
+# only way to know a lap is done is seeing this number again.
+FIRST_STOCK_NUMBER = "600000"
+# Codes start with 60/68 (Shanghai), 00/30 (Shenzhen), 92 (Beijing) -- anchoring
+# on those prefixes keeps stray OCR digits from being read as a stock code.
+STOCK_NUMBER_RE = re.compile(r"(?:60|68|00|30|92)\d{4}")
+
+# seconds to let the UI redraw after switching stocks
+SWITCH_DELAY = 1.0
 
 # step 4: local OCR engine (RapidOCR, ONNXRuntime backend). Instantiated once
 # and reused for every screenshot.
@@ -74,9 +95,7 @@ def enter(input):
 
 
 class get_data:
-    def __init__(self, stoch_number, db_path=DB_PATH):
-        # the stoch number this run's readings are paired with (step 5).
-        self.stoch_number = stoch_number
+    def __init__(self, db_path=DB_PATH):
         self.conn = sqlite3.connect(db_path)
         self._init_db()
 
@@ -87,7 +106,7 @@ class get_data:
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 captured_at    TEXT NOT NULL,
                 time_slot      TEXT NOT NULL,
-                stoch_number   REAL NOT NULL,
+                stoch_number   TEXT NOT NULL,  -- OCR'd from STOCK_NUMBER_REGION
                 net_buy        REAL,   -- 主力净买额, normalized to 万
                 turnover_ratio REAL    -- 占成交额比, percentage number (e.g. 19.42)
             )
@@ -104,16 +123,47 @@ class get_data:
         gui.press("enter")
         gui.press("enter")
 
-    # --- step 3: loop the 30-minute slots, screenshot each area ------------ #
+    # --- step 3: for each slot that has happened, sweep every stock --------- #
     def step3(self):
         for slot, coord in SLOT_COORDS.items():
             self._wait_until(slot)
+            self._sweep_stocks(slot, coord)
+
+    def _sweep_stocks(self, slot, coord):
+        """Capture `slot` for every stock, clicking through the whole list.
+
+        Stops when the stock number OCR'd on screen is FIRST_STOCK_NUMBER again
+        (the list is unordered, so that is the only wrap-around signal). Leaves
+        the UI on the first stock, ready for the next slot's sweep.
+        """
+        first_iteration = True
+        while True:
+            stock_number = self._read_stock_number()
+            if not first_iteration and stock_number == FIRST_STOCK_NUMBER:
+                break                       # back to the first stock: lap done
+            first_iteration = False
+
             gui.moveTo(*coord)
             shot = gui.screenshot(region=SCREENSHOT_REGION)
 
-            # step 4 + 5 happen for each captured slot.
+            # step 4 + 5 happen for each stock at this slot.
             net_buy, turnover_ratio = self.step4(shot)
-            self.step5(slot, net_buy, turnover_ratio)
+            self.step5(slot, stock_number, net_buy, turnover_ratio)
+
+            click(*NEXT_STOCK_COORD)
+            time.sleep(SWITCH_DELAY)        # let the next stock's page render
+
+    def _read_stock_number(self, retries=3):
+        """OCR the current stock number from STOCK_NUMBER_REGION (e.g. '600000')."""
+        for attempt in range(retries):
+            shot = gui.screenshot(region=STOCK_NUMBER_REGION)
+            result, _ = ocr_engine(np.asarray(shot))
+            text = " ".join(line[1] for line in result) if result else ""
+            m = STOCK_NUMBER_RE.search(text)
+            if m:
+                return m.group(0)
+            time.sleep(1)                   # screen may still be redrawing
+        return None
 
     @staticmethod
     def _wait_until(slot):
@@ -153,14 +203,14 @@ class get_data:
         m = RATIO_RE.search(text)
         return float(m.group(1)) if m else None
 
-    # --- step 5: save the two numbers paired with the stoch number --------- #
-    def step5(self, slot, net_buy, turnover_ratio):
+    # --- step 5: save the two numbers keyed by the OCR'd stock number ------- #
+    def step5(self, slot, stock_number, net_buy, turnover_ratio):
         captured_at = datetime.now().isoformat(timespec="seconds")
         self.conn.execute(
             "INSERT INTO readings "
             "(captured_at, time_slot, stoch_number, net_buy, turnover_ratio) "
             "VALUES (?, ?, ?, ?, ?)",
-            (captured_at, slot, self.stoch_number, net_buy, turnover_ratio),
+            (captured_at, slot, stock_number, net_buy, turnover_ratio),
         )
         self.conn.commit()
 
@@ -187,7 +237,7 @@ def plus(a, b):
 
 
 if __name__ == "__main__":
-    job = get_data(stoch_number=0)   # <-- TODO pass the stoch number for this run
+    job = get_data()
     try:
         job.run()
     finally:
