@@ -24,19 +24,19 @@ from rapidocr_onnxruntime import RapidOCR
 # Config  -- fill these in for your screen / setup
 # --------------------------------------------------------------------------- #
 # step 1: where to click first, then the keys to confirm in step 2.
-START_COORD = (325, 69)          # (x, y) to click in step 1   <-- TODO set this
+START_COORD = (547, 41)
 
 # step 3: the coordinate to move to for each 30-minute slot.
 # Times run 9:30 -> 15:00 inclusive, every 30 minutes.
-X_COORDINATION_SHIFT = 396
-SLOT_Y = 882
+X_COORDINATION_SHIFT = 226
+SLOT_Y = 337
 SLOT_COORDS = {
-    f"{10 + i // 2}:{'00' if i % 2 == 0 else '30'}": (521 + X_COORDINATION_SHIFT * i, SLOT_Y)
+    f"{10 + i // 2}:{'00' if i % 2 == 0 else '30'}": (226 + X_COORDINATION_SHIFT * i, SLOT_Y)
     for i in range(11)
 }
 
 # step 3: the fixed area to screenshot at each slot -> (left, top, width, height)
-SCREENSHOT_REGION = (146, 1353, 583, 1388)   # <-- TODO set this
+SCREENSHOT_REGION = (100, 662, 369, 683)
 
 # step 4: local OCR engine (RapidOCR, ONNXRuntime backend). Instantiated once
 # and reused for every screenshot.
