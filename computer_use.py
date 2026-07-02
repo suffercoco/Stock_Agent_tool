@@ -5,19 +5,20 @@ step 2: press enter, enter
 step 3: check the time, start get data from 9:30.
 In every 30 mins move to coordination(9:30) then coordiantion(10;00) for on and so forth untill cordination(15:00).
 At each coordination get a screenshot from a specific area.
-Step 4: pass that screenshot to a ocr model to extract the information from it. Only keep numbers from it, including positive and negtive numbers.
-step 5: save that number with stoch number as a pair in database
+Step 4: run the screenshot through RapidOCR and pull the two numbers that follow
+        the labels 主力净买额 (net buy, normalized to 万) and 占成交额比 (turnover ratio %).
+step 5: save those two numbers with the stoch number as a row in the database
+
 """
 
-import base64
-import io
 import re
 import sqlite3
 import time
 from datetime import datetime, time as dtime
 
+import numpy as np
 import pyautogui as gui
-from openai import OpenAI
+from rapidocr_onnxruntime import RapidOCR
 
 # --------------------------------------------------------------------------- #
 # Config  -- fill these in for your screen / setup
@@ -37,15 +38,29 @@ SLOT_COORDS = {
 # step 3: the fixed area to screenshot at each slot -> (left, top, width, height)
 SCREENSHOT_REGION = (146, 1353, 583, 1388)   # <-- TODO set this
 
-# step 4: OCR model served by LM Studio (must be vision-capable).
-client = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="lm-studio")
-OCR_MODEL = "google/gemma-4-e4b"
+# step 4: local OCR engine (RapidOCR, ONNXRuntime backend). Instantiated once
+# and reused for every screenshot.
+ocr_engine = RapidOCR()
 
 # step 5: sqlite database file.
 DB_PATH = "stoch_data.db"
 
-# matches integers and decimals, with an optional leading minus sign.
-NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
+# step 4: the two labels we care about and the value that follows each.
+#   主力净买额 -> a 净买额 in 万 / 亿  (stored normalized to 万)
+#   占成交额比 -> a percentage        (stored as the bare number, e.g. 19.42)
+LABEL_NET_BUY = "主力净买额"
+LABEL_RATIO = "占成交额比"
+
+# A signed decimal optionally followed by a 万/亿 unit. We allow any run of
+# non-numeric "filler" (colon, spaces, full-width punctuation, OCR noise)
+# between the label and its number.
+_NUMBER = r"(-?\d+(?:\.\d+)?)"
+_FILLER = r"[^\d\-]*"
+NET_BUY_RE = re.compile(LABEL_NET_BUY + _FILLER + _NUMBER + r"\s*(万|亿)?")
+RATIO_RE = re.compile(LABEL_RATIO + _FILLER + _NUMBER)
+
+# how many 万 each unit represents (values are normalized to 万).
+_UNIT_TO_WAN = {"万": 1, "亿": 10_000}
 
 
 def click(x, y):
@@ -69,11 +84,12 @@ class get_data:
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS readings (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                captured_at  TEXT NOT NULL,
-                time_slot    TEXT NOT NULL,
-                stoch_number REAL NOT NULL,
-                value        REAL NOT NULL
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                captured_at    TEXT NOT NULL,
+                time_slot      TEXT NOT NULL,
+                stoch_number   REAL NOT NULL,
+                net_buy        REAL,   -- 主力净买额, normalized to 万
+                turnover_ratio REAL    -- 占成交额比, percentage number (e.g. 19.42)
             )
             """
         )
@@ -96,8 +112,8 @@ class get_data:
             shot = gui.screenshot(region=SCREENSHOT_REGION)
 
             # step 4 + 5 happen for each captured slot.
-            numbers = self.step4(shot)
-            self.step5(slot, numbers)
+            net_buy, turnover_ratio = self.step4(shot)
+            self.step5(slot, net_buy, turnover_ratio)
 
     @staticmethod
     def _wait_until(slot):
@@ -107,46 +123,57 @@ class get_data:
         while datetime.now().time() < target:
             time.sleep(5)
 
-    # --- step 4: OCR the screenshot, keep only the numbers ----------------- #
+    # --- step 4: OCR the screenshot, pull the two labelled numbers --------- #
     def step4(self, image):
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        # RapidOCR takes a numpy array (RGB). pyautogui returns a PIL image.
+        result, _ = ocr_engine(np.asarray(image))
 
-        resp = client.chat.completions.create(
-            model=OCR_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Transcribe every number you see in this image, "
-                            "exactly as shown, including any minus signs. "
-                            "Return only the numbers separated by spaces.",
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64}"},
-                        },
-                    ],
-                }
-            ],
-        )
-        text = resp.choices[0].message.content or ""
-        return [float(n) for n in NUMBER_RE.findall(text)]
+        # result is a list of [box, text, score]; None when nothing is found.
+        # Join the recognized text boxes (reading order) so a label and the
+        # number next to it land in the same string for the regexes below.
+        text = " ".join(line[1] for line in result) if result else ""
 
-    # --- step 5: save each number paired with the stoch number ------------- #
-    def step5(self, slot, numbers):
+        net_buy = self._parse_net_buy(text)
+        turnover_ratio = self._parse_ratio(text)
+        return net_buy, turnover_ratio
+
+    @staticmethod
+    def _parse_net_buy(text):
+        """Number after 主力净买额, normalized to 万 (亿 -> ×10000). None if absent."""
+        m = NET_BUY_RE.search(text)
+        if not m:
+            return None
+        value = float(m.group(1))
+        unit = m.group(2) or "万"          # bare number is already in 万
+        return value * _UNIT_TO_WAN[unit]
+
+    @staticmethod
+    def _parse_ratio(text):
+        """Number after 占成交额比, e.g. 19.42. None if absent."""
+        m = RATIO_RE.search(text)
+        return float(m.group(1)) if m else None
+
+    # --- step 5: save the two numbers paired with the stoch number --------- #
+    def step5(self, slot, net_buy, turnover_ratio):
         captured_at = datetime.now().isoformat(timespec="seconds")
-        self.conn.executemany(
-            "INSERT INTO readings (captured_at, time_slot, stoch_number, value) "
-            "VALUES (?, ?, ?, ?)",
-            [(captured_at, slot, self.stoch_number, value) for value in numbers],
+        self.conn.execute(
+            "INSERT INTO readings "
+            "(captured_at, time_slot, stoch_number, net_buy, turnover_ratio) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (captured_at, slot, self.stoch_number, net_buy, turnover_ratio),
         )
         self.conn.commit()
 
+    @staticmethod
+    def is_market_day(date=None):
+        """True on weekdays. The market is closed Sat/Sun (holidays not handled)."""
+        date = date or datetime.now()
+        return date.weekday() < 5      # Mon=0 ... Fri=4, Sat=5, Sun=6
+
     def run(self):
+        if not self.is_market_day():
+            print(f"{datetime.now():%Y-%m-%d} is a weekend; market closed, skipping.")
+            return
         self.step1()
         self.step2()
         self.step3()
