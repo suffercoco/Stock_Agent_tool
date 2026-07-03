@@ -1,7 +1,7 @@
 # TODO
 """
 step 1: move to specific coordination, then left lick
-step 2: press enter, enter
+step 2: press enter
 step 3: check the current time first -- a slot can only be captured after it has
         actually happened. For each 30-minute slot (10:00 ... 15:00):
         wait until the slot time is reached, then sweep ALL stocks for that slot:
@@ -36,7 +36,7 @@ START_COORD = (547, 41)
 X_COORDINATION_SHIFT = 226
 SLOT_Y = 337
 SLOT_COORDS = {
-    f"{10 + i // 2}:{'00' if i % 2 == 0 else '30'}": (226 + X_COORDINATION_SHIFT * i, SLOT_Y)
+    f"{10 + i // 2}:{'00' if i % 2 == 0 else '30'}": (268 + X_COORDINATION_SHIFT * i, SLOT_Y)
     for i in range(11)
 }
 
@@ -44,10 +44,10 @@ SLOT_COORDS = {
 SCREENSHOT_REGION = (100, 662, 369, 683)
 
 # step 3: click here to switch to the next stock.
-NEXT_STOCK_COORD = (0, 0)          # TODO fill in for your screen
+NEXT_STOCK_COORD = (125, 61)
 
 # step 3: the area showing the current stock number -> (left, top, width, height)
-STOCK_NUMBER_REGION = (0, 0, 0, 0)  # TODO fill in for your screen
+STOCK_NUMBER_REGION = (1629, 79, 1683, 99) 
 
 # The first stock in the rotation. The list is not in increasing order, so the
 # only way to know a lap is done is seeing this number again.
@@ -121,7 +121,7 @@ class get_data:
     # --- step 2: press enter twice ----------------------------------------- #
     def step2(self):
         gui.press("enter")
-        gui.press("enter")
+        # gui.press("enter")
 
     # --- step 3: for each slot that has happened, sweep every stock --------- #
     def step3(self):
