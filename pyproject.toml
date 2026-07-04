@@ -10,4 +10,5 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pygetwindow>=0.0.9",
     "rapidocr-onnxruntime>=1.4.0",
+    "smbprotocol>=1.16.1",
 ]
