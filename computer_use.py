@@ -1,9 +1,9 @@
-# TODO
+# TODO verify db is correctly save data or not
 """
 step 1: move to specific coordination, then left lick
 step 2: press enter
 step 3: check the current time first -- a slot can only be captured after it has
-        actually happened. For each 30-minute slot (10:00 ... 15:00):
+        actually happened. For each captured slot (currently only 15:00):
         wait until the slot time is reached, then sweep ALL stocks for that slot:
         move to the slot coordination, screenshot the data area, OCR the current
         stock number from its own area, then click to the next stock and repeat.
@@ -40,9 +40,12 @@ START_COORD = (547, 41)
 X_COORDINATION_SHIFT = 226
 SLOT_Y = 337
 SLOT_TIMES = ("10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00")
+# Only these slots are captured; the others still anchor the column x-positions.
+CAPTURE_SLOTS = ("15:00",)
 SLOT_COORDS = {
     slot: (268 + X_COORDINATION_SHIFT * i, SLOT_Y)
     for i, slot in enumerate(SLOT_TIMES)
+    if slot in CAPTURE_SLOTS
 }
 
 # step 3: the fixed area to screenshot at each slot -> (left, top, width, height)
@@ -151,25 +154,33 @@ class get_data:
         prev_key = None
         while True:
             stock_number = self._read_stock_number()
-            if stock_number is not None:
-                key = stock_sort_key(stock_number)
-                if prev_key is not None and key < prev_key:
-                    break               # order went backwards: lap done
-                prev_key = key
+            key = stock_sort_key(stock_number)
+            if prev_key is not None and key < prev_key:
+                break               # order went backwards: lap done
+            prev_key = key
 
             gui.moveTo(*coord)
             shot = gui.screenshot(region=SCREENSHOT_REGION)
 
             # step 4 + 5 happen for each stock at this slot.
             net_buy, turnover_ratio = self.step4(shot)
-            self.step5(slot, stock_number, net_buy, turnover_ratio)
+            if net_buy is None and turnover_ratio is None:
+                # Delisted stock: the code still exists in the app but its
+                # data panel is empty, so there is no row worth saving.
+                print(f"[{slot}] {stock_number}: no data (delisted?), skipping")
+            else:
+                self.step5(slot, stock_number, net_buy, turnover_ratio)
 
             click(*NEXT_STOCK_COORD)
             time.sleep(SWITCH_DELAY)        # let the next stock's page render
 
     def _read_stock_number(self, retries=3):
-        """OCR the current stock number from STOCK_NUMBER_REGION (e.g. '600000')."""
-        for attempt in range(retries):
+        """OCR the current stock number from STOCK_NUMBER_REGION (e.g. '600000').
+
+        Every stock (even a delisted one) shows its number, so failing all
+        retries means the screen/OCR is broken -- stop instead of guessing.
+        """
+        for _ in range(retries):
             shot = gui.screenshot(region=STOCK_NUMBER_REGION)
             result, _ = ocr_engine(np.asarray(shot))
             text = " ".join(line[1] for line in result) if result else ""
@@ -177,7 +188,10 @@ class get_data:
             if m:
                 return m.group(0)
             time.sleep(1)                   # screen may still be redrawing
-        return None
+        raise RuntimeError(
+            f"could not OCR a stock number from {STOCK_NUMBER_REGION} "
+            f"after {retries} tries (last text: {text!r})"
+        )
 
     @staticmethod
     def _wait_until(slot):
