@@ -8,6 +8,10 @@
   Template for build_dashboard.py. The __STOCH_DATA_JSON__ placeholder below is
   replaced with real rows from stoch_data.db; open the built dashboard.html,
   not this file.
+
+  Language: the EN / 中文 switch in the filter row swaps every label. The choice
+  is remembered in localStorage; a ?lang=zh or ?lang=en URL parameter overrides
+  it (useful for a bookmarked NAS link).
 -->
 <style>
   :root {
@@ -58,7 +62,7 @@
     margin: 0;
     background: var(--page);
     color: var(--ink);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 14px;
     line-height: 1.45;
   }
@@ -76,6 +80,17 @@
   }
   .filter-row select:focus-visible { outline: 2px solid var(--l2); outline-offset: 1px; }
   .filter-hint { color: var(--muted); font-size: 12.5px; }
+
+  .lang-switch {
+    margin-left: auto; display: inline-flex;
+    border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+  }
+  .lang-switch button {
+    font: inherit; font-size: 12.5px; padding: 4px 10px; border: 0;
+    background: var(--surface); color: var(--ink-2); cursor: pointer;
+  }
+  .lang-switch button.active { background: var(--select-band); color: var(--ink); font-weight: 600; }
+  .lang-switch button:focus-visible { outline: 2px solid var(--l2); outline-offset: -2px; }
 
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
   .tile {
@@ -162,30 +177,33 @@
 
 <div class="wrap">
   <header>
-    <h1>Turnover notch board</h1>
-    <p>End-of-day 占成交额比 (main-force net buy as % of turnover) across the watch list,
-       bucketed by notch level.</p>
+    <h1 id="titleH"></h1>
+    <p id="ledeP"></p>
     <p class="meta-note" id="metaLine"></p>
   </header>
 
   <div class="filter-row">
-    <label for="daySel">Trading day</label>
+    <label for="daySel" id="dayLbl"></label>
     <select id="daySel"></select>
-    <span class="filter-hint">or click any column / date header below — every panel follows the same day</span>
+    <span class="filter-hint" id="filterHint"></span>
+    <div class="lang-switch" id="langSwitch" role="group" aria-label="Language / 语言">
+      <button type="button" data-lang="en">EN</button>
+      <button type="button" data-lang="zh">中文</button>
+    </div>
   </div>
 
   <div class="kpis" id="kpis"></div>
 
   <section class="card">
-    <h2>How many stocks notched, day by day</h2>
-    <p class="sub">Count of stocks at each level on the captured slot — the market-wide pulse of the notch system.</p>
+    <h2 id="stackTitle"></h2>
+    <p class="sub" id="stackSub"></p>
     <div class="legend" id="stackLegend"></div>
     <div id="stackChart"></div>
   </section>
 
   <section class="card">
-    <h2>Who is notching, and for how long</h2>
-    <p class="sub">Stocks that reached level 1+ at least once in the window, one row each, sorted by notch days. Runs of dark cells are sustained main-force activity; isolated cells are one-day spikes. Hollow cells mean no reading that day.</p>
+    <h2 id="hmTitle"></h2>
+    <p class="sub" id="hmSub"></p>
     <div class="legend" id="hmLegend"></div>
     <div class="hm-scroll"><div class="hm" id="heatmap"></div></div>
     <p class="hm-more" id="hmMore"></p>
@@ -193,18 +211,18 @@
 
   <div class="day-grid">
     <section class="card">
-      <h2>Selected day: ratio vs. net buy</h2>
-      <p class="sub">Every tracked stock on <span id="scatterDay"></span>. Right of the zero line, the main force bought; height is the turnover share. Hairlines mark the notch thresholds.</p>
+      <h2 id="scatterTitle"></h2>
+      <p class="sub" id="scatterSub"></p>
       <div class="legend" id="scatterLegend"></div>
       <div id="scatter"></div>
     </section>
     <section class="card">
-      <h2>Top notched stocks · <span id="tableDay"></span></h2>
-      <p class="sub">Table twin of the charts — the same values, readable without hovering.</p>
+      <h2 id="tableTitle"></h2>
+      <p class="sub" id="tableSub"></p>
       <div style="overflow-x:auto">
         <table id="topTable">
           <thead>
-            <tr><th>Code</th><th>Level</th><th class="num">占成交额比</th><th class="num">主力净买额</th></tr>
+            <tr><th id="thCode"></th><th id="thLevel"></th><th class="num" id="thRatio"></th><th class="num" id="thNb"></th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -231,18 +249,8 @@ const ratio = DATA.ratio;        /* stocks × days; null = no reading */
 const netBuy = DATA.net_buy;     /* same shape, 万; null = no reading */
 const TH = DATA.thresholds;      /* ascending, e.g. [5, 10, 15] */
 
-const dayLabel = d => (d.getMonth() + 1) + "/" + d.getDate();
-const dayFull = d => d.getFullYear() + "-" +
-  String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-
 const levelOf = v =>
   v == null ? 0 : v >= TH[2] ? 3 : v >= TH[1] ? 2 : v >= TH[0] ? 1 : 0;
-const LEVEL_NAME = [
-  "below notch",
-  `Level 1 · ${TH[0]}–${TH[1]}%`,
-  `Level 2 · ${TH[1]}–${TH[2]}%`,
-  `Level 3 · ≥${TH[2]}%`,
-];
 const LEVEL_VAR = ["--cell-0", "--l1", "--l2", "--l3"];
 
 const fmtWan = v => {
@@ -252,9 +260,136 @@ const fmtWan = v => {
   return a >= 10000 ? sign + (a / 10000).toFixed(2) + " 亿" : sign + a.toLocaleString() + " 万";
 };
 
-document.getElementById("metaLine").textContent =
-  `Notch levels — L1 ≥ ${TH[0]}%, L2 ≥ ${TH[1]}%, L3 ≥ ${TH[2]}% · slot ${DATA.slot} · ` +
-  `${stocks.length} stocks · ${days.length} trading days · built ${DATA.generated_at}`;
+/* ---------------- language ---------------- */
+
+const I18N = {
+  en: {
+    htmlLang: "en",
+    title: "Turnover notch board",
+    lede: "End-of-day 占成交额比 (main-force net buy as % of turnover) across the watch list, bucketed by notch level.",
+    meta: () => `Notch levels — L1 ≥ ${TH[0]}%, L2 ≥ ${TH[1]}%, L3 ≥ ${TH[2]}% · slot ${DATA.slot} · ` +
+      `${stocks.length} stocks · ${days.length} trading days · built ${DATA.generated_at}`,
+    dayLbl: "Trading day",
+    filterHint: "or click any column / date header below — every panel follows the same day",
+    kpiTracked: "Stocks tracked", kpiTrackedSub: "watch list size",
+    kpiNotched: "Notched (L1+)", kpiNotchedSub: d => "on " + d,
+    kpiL3: "At level 3", kpiL3Sub: () => `ratio ≥ ${TH[2]}%`,
+    kpiTop: "Top ratio", kpiTopNone: "no readings this day",
+    stackTitle: "How many stocks notched, day by day",
+    stackSub: "Count of stocks at each level on the captured slot — the market-wide pulse of the notch system.",
+    stackAria: "Stacked columns of notched stock counts per day",
+    levelName: lv => ["below notch",
+      `Level 1 · ${TH[0]}–${TH[1]}%`,
+      `Level 2 · ${TH[1]}–${TH[2]}%`,
+      `Level 3 · ≥${TH[2]}%`][lv],
+    levelShort: lv => "Level " + lv,
+    totalNotched: "Total notched",
+    hmTitle: "Who is notching, and for how long",
+    hmSub: "Stocks that reached level 1+ at least once in the window, one row each, sorted by notch days. Runs of dark cells are sustained main-force activity; isolated cells are one-day spikes. Hollow cells mean no reading that day.",
+    hmNone: "No stock notched in this window.",
+    hmCapped: (extra, cap) => `${extra} more stocks notched at least once; rows are capped at ${cap} by notch days — the table below keeps every value reachable.`,
+    hmAll: (n, total) => `${n} of ${total} tracked stocks notched at least once in this window.`,
+    noReading: "no reading",
+    notch: "Notch",
+    belowTh: () => `below ${TH[0]}%`,
+    scatterTitle: "Selected day: ratio vs. net buy",
+    scatterSub: d => `Every tracked stock on ${d}. Right of the zero line, the main force bought; height is the turnover share. Hairlines mark the notch thresholds.`,
+    scatterAria: "Scatter of net buy versus turnover ratio for the selected day",
+    inflow: "Net inflow", outflow: "Net outflow",
+    tableTitle: d => "Top notched stocks · " + d,
+    tableSub: "Table twin of the charts — the same values, readable without hovering.",
+    thCode: "Code", thLevel: "Level", thRatio: "占成交额比", thNb: "主力净买额",
+    tableEmpty: "No stock notched on this day.",
+    dayShort: d => (d.getMonth() + 1) + "/" + d.getDate(),
+  },
+  zh: {
+    htmlLang: "zh-CN",
+    title: "占成交额比分级看板",
+    lede: "收盘后自选股的占成交额比（主力净买额 ÷ 成交额），按档位分级呈现。",
+    meta: () => `分级阈值 — 一档 ≥ ${TH[0]}%，二档 ≥ ${TH[1]}%，三档 ≥ ${TH[2]}% · 时段 ${DATA.slot} · ` +
+      `${stocks.length} 只股票 · ${days.length} 个交易日 · 生成于 ${DATA.generated_at}`,
+    dayLbl: "交易日",
+    filterHint: "也可点击下方任意柱子或日期表头——所有面板联动到同一天",
+    kpiTracked: "跟踪股票数", kpiTrackedSub: "自选列表规模",
+    kpiNotched: "达档（L1+）", kpiNotchedSub: d => d,
+    kpiL3: "达到三档", kpiL3Sub: () => `占比 ≥ ${TH[2]}%`,
+    kpiTop: "最高占比", kpiTopNone: "当日无数据",
+    stackTitle: "每日达档股票数",
+    stackSub: "各交易日处于每个档位的股票数量——分级体系的整体脉搏。",
+    stackAria: "每日达档股票数堆叠柱状图",
+    levelName: lv => ["未达档",
+      `一档 · ${TH[0]}–${TH[1]}%`,
+      `二档 · ${TH[1]}–${TH[2]}%`,
+      `三档 · ≥${TH[2]}%`][lv],
+    levelShort: lv => ["", "一档", "二档", "三档"][lv],
+    totalNotched: "达档合计",
+    hmTitle: "哪些股票在达档、持续多久",
+    hmSub: "统计窗口内至少达档一次的股票，每行一只，按达档天数排序。连续的深色格子表示主力持续活跃；孤立格子是单日脉冲；空心格子表示当日无数据。",
+    hmNone: "窗口内没有股票达档。",
+    hmCapped: (extra, cap) => `另有 ${extra} 只股票至少达档一次；按达档天数仅显示前 ${cap} 行——全部数值可在下方表格中查看。`,
+    hmAll: (n, total) => `窗口内共有 ${n}/${total} 只跟踪股票至少达档一次。`,
+    noReading: "无数据",
+    notch: "档位",
+    belowTh: () => `低于 ${TH[0]}%`,
+    scatterTitle: "选定交易日：占比 vs. 净买额",
+    scatterSub: d => `${d} 全部跟踪股票。零线右侧为主力净买入；纵轴为占成交额比；虚线为各档位阈值。`,
+    scatterAria: "选定交易日净买额与占成交额比散点图",
+    inflow: "净流入", outflow: "净流出",
+    tableTitle: d => "达档股票排行 · " + d,
+    tableSub: "与图表对应的数据表——同样的数值，无需悬停即可查看。",
+    thCode: "代码", thLevel: "档位", thRatio: "占成交额比", thNb: "主力净买额",
+    tableEmpty: "当日没有股票达档。",
+    dayShort: d => (d.getMonth() + 1) + "月" + d.getDate() + "日",
+  },
+};
+
+function loadLang() {
+  const fromUrl = new URLSearchParams(location.search).get("lang");
+  if (fromUrl === "en" || fromUrl === "zh") return fromUrl;
+  try {
+    const saved = localStorage.getItem("notch-lang");
+    if (saved === "en" || saved === "zh") return saved;
+  } catch (e) { /* storage unavailable (e.g. file://) — fall through */ }
+  return (navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+let lang = loadLang();
+const t = () => I18N[lang];
+
+const dayLabel = d => (d.getMonth() + 1) + "/" + d.getDate();   /* chart ticks: compact in both languages */
+const dayFull = d => d.getFullYear() + "-" +
+  String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+
+function setText(id, text) { document.getElementById(id).textContent = text; }
+
+function applyLang() {
+  document.documentElement.lang = t().htmlLang;
+  document.title = t().title;
+  setText("titleH", t().title);
+  setText("ledeP", t().lede);
+  setText("metaLine", t().meta());
+  setText("dayLbl", t().dayLbl);
+  setText("filterHint", t().filterHint);
+  setText("stackTitle", t().stackTitle);
+  setText("stackSub", t().stackSub);
+  setText("hmTitle", t().hmTitle);
+  setText("hmSub", t().hmSub);
+  setText("tableSub", t().tableSub);
+  setText("thCode", t().thCode);
+  setText("thLevel", t().thLevel);
+  setText("thRatio", t().thRatio);
+  setText("thNb", t().thNb);
+  document.querySelectorAll("#langSwitch button").forEach(b =>
+    b.classList.toggle("active", b.dataset.lang === lang));
+}
+
+document.querySelectorAll("#langSwitch button").forEach(b =>
+  b.addEventListener("click", () => {
+    if (b.dataset.lang === lang) return;
+    lang = b.dataset.lang;
+    try { localStorage.setItem("notch-lang", lang); } catch (e) { /* ignore */ }
+    applyLang();
+    setDay(selDay);        /* re-render every panel in the new language */
+  }));
 
 /* ---------------- shared state + tooltip ---------------- */
 
@@ -287,9 +422,9 @@ function tRow(el, key, val, swColor) {
   row.append(k, v); el.appendChild(row);
 }
 function tTitle(el, text) {
-  const t = document.createElement("div");
-  t.className = "t-title"; t.textContent = text;
-  el.appendChild(t);
+  const title = document.createElement("div");
+  title.className = "t-title"; title.textContent = text;
+  el.appendChild(title);
 }
 const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
@@ -308,19 +443,19 @@ function renderKpis() {
   const el = document.getElementById("kpis");
   el.replaceChildren();
   const tiles = [
-    ["Stocks tracked", String(stocks.length), "watch list size"],
-    ["Notched (L1+)", String(notched), "on " + dayLabel(days[selDay])],
-    ["At level 3", String(counts[3]), `ratio ≥ ${TH[2]}%`],
+    [t().kpiTracked, String(stocks.length), t().kpiTrackedSub],
+    [t().kpiNotched, String(notched), t().kpiNotchedSub(t().dayShort(days[selDay]))],
+    [t().kpiL3, String(counts[3]), t().kpiL3Sub()],
     topV == null
-      ? ["Top ratio", "—", "no readings this day"]
-      : ["Top ratio", topV.toFixed(2) + "%", stocks[topS] + " · " + fmtWan(netBuy[topS][selDay])],
+      ? [t().kpiTop, "—", t().kpiTopNone]
+      : [t().kpiTop, topV.toFixed(2) + "%", stocks[topS] + " · " + fmtWan(netBuy[topS][selDay])],
   ];
   for (const [lbl, val, sub] of tiles) {
-    const t = document.createElement("div"); t.className = "tile";
+    const tile = document.createElement("div"); tile.className = "tile";
     const l = document.createElement("div"); l.className = "lbl"; l.textContent = lbl;
     const v = document.createElement("div"); v.className = "val"; v.textContent = val;
     const s = document.createElement("div"); s.className = "sub"; s.textContent = sub;
-    t.append(l, v, s); el.appendChild(t);
+    tile.append(l, v, s); el.appendChild(tile);
   }
 }
 
@@ -353,12 +488,12 @@ function renderStack() {
   const y = v => mT + plotH - (v / yMax) * plotH;
 
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img",
-    "aria-label": "Stacked columns of notched stock counts per day" });
+    "aria-label": t().stackAria });
 
-  for (let t = 0; t <= yMax; t += yMax / 4) {
-    svg.appendChild(svgEl("line", { x1: mL, x2: W - mR, y1: y(t), y2: y(t), class: t === 0 ? "base-ln" : "grid-ln" }));
-    const txt = svgEl("text", { x: mL - 6, y: y(t) + 3.5, "text-anchor": "end", class: "axis-txt" });
-    txt.textContent = String(t);
+  for (let tick = 0; tick <= yMax; tick += yMax / 4) {
+    svg.appendChild(svgEl("line", { x1: mL, x2: W - mR, y1: y(tick), y2: y(tick), class: tick === 0 ? "base-ln" : "grid-ln" }));
+    const txt = svgEl("text", { x: mL - 6, y: y(tick) + 3.5, "text-anchor": "end", class: "axis-txt" });
+    txt.textContent = String(tick);
     svg.appendChild(txt);
   }
 
@@ -391,14 +526,14 @@ function renderStack() {
       svg.appendChild(txt);
     }
     const hit = svgEl("rect", { class: "bar-hit", x: mL + d * band, y: mT, width: band, height: plotH, rx: 4, tabindex: "0",
-      "aria-label": dayFull(days[d]) + ": " + (c[1] + c[2] + c[3]) + " notched" });
+      "aria-label": dayFull(days[d]) + ": " + (c[1] + c[2] + c[3]) });
     hit.addEventListener("pointermove", ev => {
       showTooltip(ev.clientX, ev.clientY, el => {
         tTitle(el, dayFull(days[d]));
-        tRow(el, "Level 3", String(c[3]), cssVar("--l3"));
-        tRow(el, "Level 2", String(c[2]), cssVar("--l2"));
-        tRow(el, "Level 1", String(c[1]), cssVar("--l1"));
-        tRow(el, "Total notched", String(c[1] + c[2] + c[3]));
+        tRow(el, t().levelShort(3), String(c[3]), cssVar("--l3"));
+        tRow(el, t().levelShort(2), String(c[2]), cssVar("--l2"));
+        tRow(el, t().levelShort(1), String(c[1]), cssVar("--l1"));
+        tRow(el, t().totalNotched, String(c[1] + c[2] + c[3]));
       });
     });
     hit.addEventListener("pointerleave", hideTooltip);
@@ -415,8 +550,8 @@ function renderStack() {
   for (let lv = 3; lv >= 1; lv--) {
     const k = document.createElement("span"); k.className = "key";
     const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = `var(${LEVEL_VAR[lv]})`;
-    const t = document.createElement("span"); t.textContent = LEVEL_NAME[lv];
-    k.append(sw, t); leg.appendChild(k);
+    const label = document.createElement("span"); label.textContent = t().levelName(lv);
+    k.append(sw, label); leg.appendChild(k);
   }
 }
 
@@ -466,15 +601,15 @@ function renderHeatmap() {
       cell.className = "cell" + (v == null ? " nodata" : lv ? " c" + lv : "");
       cell.tabIndex = 0;
       cell.setAttribute("aria-label", row.code + " " + dayFull(days[d]) + ": " +
-        (v == null ? "no reading" : v.toFixed(2) + "%"));
+        (v == null ? t().noReading : v.toFixed(2) + "%"));
       const show = (x, yy) => showTooltip(x, yy, el => {
         tTitle(el, row.code + " · " + dayFull(days[d]));
         if (v == null) {
-          tRow(el, "占成交额比", "no reading");
+          tRow(el, "占成交额比", t().noReading);
         } else {
           tRow(el, "占成交额比", v.toFixed(2) + "%", lv ? cssVar(LEVEL_VAR[lv]) : null);
           tRow(el, "主力净买额", fmtWan(netBuy[row.s][d]));
-          tRow(el, "Notch", lv ? "Level " + lv : `below ${TH[0]}%`);
+          tRow(el, t().notch, lv ? t().levelShort(lv) : t().belowTh());
         }
       });
       cell.addEventListener("pointermove", ev => { cell.classList.add("hov"); show(ev.clientX, ev.clientY); });
@@ -487,11 +622,11 @@ function renderHeatmap() {
 
   const more = document.getElementById("hmMore");
   if (!notchedRows.length) {
-    more.textContent = "No stock notched in this window.";
+    more.textContent = t().hmNone;
   } else if (notchedRows.length > HM_MAX_ROWS) {
-    more.textContent = `${notchedRows.length - HM_MAX_ROWS} more stocks notched at least once; rows are capped at ${HM_MAX_ROWS} by notch days — the table below keeps every value reachable.`;
+    more.textContent = t().hmCapped(notchedRows.length - HM_MAX_ROWS, HM_MAX_ROWS);
   } else {
-    more.textContent = `${notchedRows.length} of ${stocks.length} tracked stocks notched at least once in this window.`;
+    more.textContent = t().hmAll(notchedRows.length, stocks.length);
   }
 
   const leg = document.getElementById("hmLegend");
@@ -500,8 +635,9 @@ function renderHeatmap() {
     const k = document.createElement("span"); k.className = "key";
     const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = `var(${LEVEL_VAR[lv]})`;
     if (lv === 0) sw.style.border = "1px solid " + cssVar("--grid");
-    const t = document.createElement("span"); t.textContent = lv === 0 ? `< ${TH[0]}%` : LEVEL_NAME[lv];
-    k.append(sw, t); leg.appendChild(k);
+    const label = document.createElement("span");
+    label.textContent = lv === 0 ? `< ${TH[0]}%` : t().levelName(lv);
+    k.append(sw, label); leg.appendChild(k);
   }
 }
 
@@ -523,13 +659,13 @@ function renderScatter() {
   const Y = v => mT + plotH - (v / maxY) * plotH;
 
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img",
-    "aria-label": "Scatter of net buy versus turnover ratio for the selected day" });
+    "aria-label": t().scatterAria });
 
   const yTick = maxY > 30 ? 10 : 5;
-  for (let t = 0; t <= maxY; t += yTick) {
-    svg.appendChild(svgEl("line", { x1: mL, x2: W - mR, y1: Y(t), y2: Y(t), class: t === 0 ? "base-ln" : "grid-ln" }));
-    const txt = svgEl("text", { x: mL - 5, y: Y(t) + 3.5, "text-anchor": "end", class: "axis-txt" });
-    txt.textContent = t + "%";
+  for (let tick = 0; tick <= maxY; tick += yTick) {
+    svg.appendChild(svgEl("line", { x1: mL, x2: W - mR, y1: Y(tick), y2: Y(tick), class: tick === 0 ? "base-ln" : "grid-ln" }));
+    const txt = svgEl("text", { x: mL - 5, y: Y(tick) + 3.5, "text-anchor": "end", class: "axis-txt" });
+    txt.textContent = tick + "%";
     svg.appendChild(txt);
   }
   /* notch thresholds — dashed because they ARE thresholds, not grid */
@@ -592,22 +728,23 @@ function renderScatter() {
       tRow(el, "占成交额比", best.y.toFixed(2) + "%");
       tRow(el, "主力净买额", fmtWan(best.x), best.x >= 0 ? cssVar("--inflow") : cssVar("--outflow"));
       const lv = levelOf(best.y);
-      tRow(el, "Notch", lv ? "Level " + lv : `below ${TH[0]}%`);
+      tRow(el, t().notch, lv ? t().levelShort(lv) : t().belowTh());
     });
   });
   hover.addEventListener("pointerleave", () => { if (ring) { ring.remove(); ring = null; } hideTooltip(); });
   svg.appendChild(hover);
 
   document.getElementById("scatter").replaceChildren(svg);
-  document.getElementById("scatterDay").textContent = dayFull(days[selDay]);
+  setText("scatterTitle", t().scatterTitle);
+  setText("scatterSub", t().scatterSub(dayFull(days[selDay])));
 
   const leg = document.getElementById("scatterLegend");
   leg.replaceChildren();
-  for (const [name, v] of [["Net inflow", "--inflow"], ["Net outflow", "--outflow"]]) {
+  for (const [name, v] of [[t().inflow, "--inflow"], [t().outflow, "--outflow"]]) {
     const k = document.createElement("span"); k.className = "key";
     const sw = document.createElement("span"); sw.className = "dotsw"; sw.style.background = `var(${v})`;
-    const t = document.createElement("span"); t.textContent = name;
-    k.append(sw, t); leg.appendChild(k);
+    const label = document.createElement("span"); label.textContent = name;
+    k.append(sw, label); leg.appendChild(k);
   }
 }
 
@@ -640,11 +777,11 @@ function renderTable() {
   if (!rows.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 4; td.textContent = "No stock notched on this day.";
+    td.colSpan = 4; td.textContent = t().tableEmpty;
     td.style.color = "var(--muted)";
     tr.appendChild(td); tbody.appendChild(tr);
   }
-  document.getElementById("tableDay").textContent = dayFull(days[selDay]);
+  setText("tableTitle", t().tableTitle(dayFull(days[selDay])));
 }
 
 /* ---------------- day selection wiring ---------------- */
@@ -665,6 +802,7 @@ function setDay(d) {
   renderKpis(); renderStack(); renderHeatmap(); renderScatter(); renderTable();
 }
 
+applyLang();
 setDay(selDay);
 </script>
 </body>
