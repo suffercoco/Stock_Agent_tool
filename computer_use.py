@@ -7,8 +7,10 @@ step 3: check the current time first -- a slot can only be captured after it has
         wait until the slot time is reached, then sweep ALL stocks for that slot:
         move to the slot coordination, screenshot the data area, OCR the current
         stock number from its own area, then click to the next stock and repeat.
-        The stock list is not ordered; seeing the first stock number (600000)
-        again means the lap is complete and we move on to the next slot.
+        The stock list is ordered (prefix groups 60, 68, 00, 30, 92, codes
+        increasing within each group) but of unknown length; when the OCR'd
+        code sorts lower than the previous one the list has wrapped, the lap
+        is complete and we move on to the next slot.
 Step 4: run the screenshot through RapidOCR and pull the two numbers that follow
         the labels 主力净买额 (net buy, normalized to 万) and 占成交额比 (turnover ratio %).
 step 5: save those two numbers keyed by the OCR'd stock number as a row in the
@@ -32,12 +34,15 @@ from rapidocr_onnxruntime import RapidOCR
 START_COORD = (547, 41)
 
 # step 3: the coordinate to move to for each 30-minute slot.
-# Times run 9:30 -> 15:00 inclusive, every 30 minutes.
+# The market breaks for lunch 11:30 -> 13:00, and slots are labelled by their
+# end time, so the tradable slots are the 8 below. The app shows only these
+# columns (no lunch columns), so their x-positions are consecutive on screen.
 X_COORDINATION_SHIFT = 226
 SLOT_Y = 337
+SLOT_TIMES = ("10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00")
 SLOT_COORDS = {
-    f"{10 + i // 2}:{'00' if i % 2 == 0 else '30'}": (268 + X_COORDINATION_SHIFT * i, SLOT_Y)
-    for i in range(11)
+    slot: (268 + X_COORDINATION_SHIFT * i, SLOT_Y)
+    for i, slot in enumerate(SLOT_TIMES)
 }
 
 # step 3: the fixed area to screenshot at each slot -> (left, top, width, height)
@@ -49,12 +54,17 @@ NEXT_STOCK_COORD = (125, 61)
 # step 3: the area showing the current stock number -> (left, top, width, height)
 STOCK_NUMBER_REGION = (1629, 79, 1683, 99) 
 
-# The first stock in the rotation. The list is not in increasing order, so the
-# only way to know a lap is done is seeing this number again.
-FIRST_STOCK_NUMBER = "600000"
-# Codes start with 60/68 (Shanghai), 00/30 (Shenzhen), 92 (Beijing) -- anchoring
-# on those prefixes keeps stray OCR digits from being read as a stock code.
+# The list is ordered: prefix groups appear as 60, 68, 00, 30, 92, and codes
+# increase within each group. How many stocks the list holds is unknown, so the
+# wrap-around signal is the ordering going backwards (see stock_sort_key).
+STOCK_PREFIX_ORDER = ("60", "68", "00", "30", "92")
+# Anchoring on those prefixes keeps stray OCR digits from being read as a code.
 STOCK_NUMBER_RE = re.compile(r"(?:60|68|00|30|92)\d{4}")
+
+
+def stock_sort_key(code):
+    """Position of `code` in the list: prefix-group order, then numeric value."""
+    return (STOCK_PREFIX_ORDER.index(code[:2]), int(code))
 
 # seconds to let the UI redraw after switching stocks
 SWITCH_DELAY = 1.0
@@ -132,16 +142,20 @@ class get_data:
     def _sweep_stocks(self, slot, coord):
         """Capture `slot` for every stock, clicking through the whole list.
 
-        Stops when the stock number OCR'd on screen is FIRST_STOCK_NUMBER again
-        (the list is unordered, so that is the only wrap-around signal). Leaves
-        the UI on the first stock, ready for the next slot's sweep.
+        The list is ordered (prefix groups 60/68/00/30/92, increasing codes
+        within each group) but its length is unknown, so the wrap-around signal
+        is the sort key going backwards: the code we just OCR'd sorts lower than
+        the previous one only when the list has looped back to the first stock.
+        Leaves the UI on the first stock, ready for the next slot's sweep.
         """
-        first_iteration = True
+        prev_key = None
         while True:
             stock_number = self._read_stock_number()
-            if not first_iteration and stock_number == FIRST_STOCK_NUMBER:
-                break                       # back to the first stock: lap done
-            first_iteration = False
+            if stock_number is not None:
+                key = stock_sort_key(stock_number)
+                if prev_key is not None and key < prev_key:
+                    break               # order went backwards: lap done
+                prev_key = key
 
             gui.moveTo(*coord)
             shot = gui.screenshot(region=SCREENSHOT_REGION)
