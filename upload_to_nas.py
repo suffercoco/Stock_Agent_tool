@@ -31,14 +31,21 @@ DB_PATHS = [
     Path(__file__).parent / "stoch_levels.db",
 ]
 
+# Plain files uploaded as-is under a stable (never dated) name, so the NAS
+# link to the dashboard stays the same day after day.
+PLAIN_PATHS = [
+    # built by build_dashboard.py
+    Path(__file__).parent / "dashboard.html",
+]
+
 NAS_IP = "100.64.0.1"
 # Name of the shared folder on the NAS, e.g. "home" or "stoch" on a Synology.
 NAS_SHARE = os.environ.get("STOCH_NAS_SHARE", "share")
 # Folder inside the share to upload into ("" = the share's root).
 NAS_REMOTE_DIR = os.environ.get("STOCH_NAS_DIR", "stoch_data")
 
-NAS_USERNAME = os.environ.get("STOCH_NAS_USER", "admin_lwd")
-NAS_PASSWORD = os.environ.get("STOCH_NAS_PASSWORD", "Lwdlwlhr5028290")
+NAS_USERNAME = os.environ.get("STOCH_NAS_USER", "username")
+NAS_PASSWORD = os.environ.get("STOCH_NAS_PASSWORD", "password")
 
 # Each upload is saved under a dated name (stoch_data_2026-07-04.db) so a day's
 # capture is never overwritten by the next day's run.
@@ -75,13 +82,28 @@ def upload_one(db_path):
     target = remote_path(db_path)
     snapshot = snapshot_db(db_path)
     try:
-        with open(snapshot, "rb") as src, smbclient.open_file(target, "wb") as dst:
-            while chunk := src.read(1024 * 1024):
-                dst.write(chunk)
+        copy_to_nas(snapshot, target)
     finally:
         snapshot.unlink()
 
     print(f"uploaded {db_path.name} -> {target}")
+
+
+def upload_plain(path):
+    """Upload a non-database file as-is, under its own (undated) name."""
+    parts = [rf"\\{NAS_IP}\{NAS_SHARE}"]
+    if NAS_REMOTE_DIR:
+        parts.append(NAS_REMOTE_DIR)
+    parts.append(path.name)
+    target = "\\".join(parts)
+    copy_to_nas(path, target)
+    print(f"uploaded {path.name} -> {target}")
+
+
+def copy_to_nas(local_path, target):
+    with open(local_path, "rb") as src, smbclient.open_file(target, "wb") as dst:
+        while chunk := src.read(1024 * 1024):
+            dst.write(chunk)
 
 
 def upload():
@@ -98,6 +120,12 @@ def upload():
 
     for db_path in existing:
         upload_one(db_path)
+
+    for path in PLAIN_PATHS:
+        if path.exists():
+            upload_plain(path)
+        else:
+            print(f"skipping {path.name}: not found")
 
 
 if __name__ == "__main__":
