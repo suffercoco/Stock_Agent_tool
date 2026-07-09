@@ -18,6 +18,7 @@ step 5: save those two numbers keyed by the OCR'd stock number as a row in the
 
 """
 
+import logging
 import re
 import sqlite3
 import time
@@ -71,6 +72,24 @@ def stock_sort_key(code):
 
 # seconds to let the UI redraw after switching stocks
 SWITCH_DELAY = 1.0
+
+# An OCR miss on one stock is skipped (logged, then on to the next stock), but
+# this many misses in a row means the screen itself is broken (popup, lock
+# screen, app closed) -- and since wrap-around detection needs readable codes,
+# clicking blindly past it could loop forever. Stop instead.
+MAX_CONSECUTIVE_OCR_MISSES = 10
+
+# Failures and progress go to this file as well as the console.
+LOG_PATH = "computer_use.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_PATH, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger(__name__)
 
 # step 4: local OCR engine (RapidOCR, ONNXRuntime backend). Instantiated once
 # and reused for every screenshot.
@@ -152,8 +171,24 @@ class get_data:
         Leaves the UI on the first stock, ready for the next slot's sweep.
         """
         prev_key = None
+        misses = 0
         while True:
             stock_number = self._read_stock_number()
+            if stock_number is None:
+                # Logged inside _read_stock_number; skip this stock and keep
+                # sweeping -- unless the misses pile up, which means the whole
+                # screen is unreadable and the wrap can no longer be detected.
+                misses += 1
+                if misses >= MAX_CONSECUTIVE_OCR_MISSES:
+                    raise RuntimeError(
+                        f"[{slot}] {misses} consecutive OCR misses -- "
+                        f"screen looks broken, aborting the sweep"
+                    )
+                click(*NEXT_STOCK_COORD)
+                time.sleep(SWITCH_DELAY)
+                continue
+            misses = 0
+
             key = stock_sort_key(stock_number)
             if prev_key is not None and key < prev_key:
                 break               # order went backwards: lap done
@@ -167,7 +202,7 @@ class get_data:
             if net_buy is None and turnover_ratio is None:
                 # Delisted stock: the code still exists in the app but its
                 # data panel is empty, so there is no row worth saving.
-                print(f"[{slot}] {stock_number}: no data (delisted?), skipping")
+                log.info("[%s] %s: no data (delisted?), skipping", slot, stock_number)
             else:
                 self.step5(slot, stock_number, net_buy, turnover_ratio)
 
@@ -177,9 +212,10 @@ class get_data:
     def _read_stock_number(self, retries=3):
         """OCR the current stock number from STOCK_NUMBER_REGION (e.g. '600000').
 
-        Every stock (even a delisted one) shows its number, so failing all
-        retries means the screen/OCR is broken -- stop instead of guessing.
+        Returns None when all retries fail, logging what OCR saw on each try
+        so the miss can be diagnosed later; the caller skips this stock.
         """
+        attempts = []
         for _ in range(retries):
             shot = gui.screenshot(region=STOCK_NUMBER_REGION)
             result, _ = ocr_engine(np.asarray(shot))
@@ -187,11 +223,14 @@ class get_data:
             m = STOCK_NUMBER_RE.search(text)
             if m:
                 return m.group(0)
+            attempts.append(text)
             time.sleep(1)                   # screen may still be redrawing
-        raise RuntimeError(
-            f"could not OCR a stock number from {STOCK_NUMBER_REGION} "
-            f"after {retries} tries (last text: {text!r})"
+        log.warning(
+            "no stock number OCR'd from %s after %d tries, skipping "
+            "(texts per try: %r)",
+            STOCK_NUMBER_REGION, retries, attempts,
         )
+        return None
 
     @staticmethod
     def _wait_until(slot):
