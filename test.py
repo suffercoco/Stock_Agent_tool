@@ -1,73 +1,87 @@
-import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 from openai import OpenAI
-from computer_use import *
 
-client = OpenAI(base_url="http://127.0.0.1:1234/v1", api_key="lm-studio")
+client = OpenAI(base_url="http://192.168.0.100:1234/v1", api_key="lm-studio")
 
-# Map tool names -> real python functions the model is allowed to call
-available_tools = {
-    "plus": plus,
-}
+MODEL = "google/gemma-4-26b-a4b-it"
+PROMPT = "Write a detailed 500-word essay about the history of computers."
+CONCURRENCY = 10
 
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "plus",
-            "description": "Return the sum for 2 numbers",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "a": {"type": "number", "description": "The first number for sum"},
-                    "b": {"type": "number", "description": "the second number for sum"},
-                },
-                "required": ["a", "b"],
-            },
-        },
-    }
-]
 
-messages = [
-    {
-        "role": "user",
-        "content": "You are a helpful math assistent, plz calculate 1203+9902 for me.",
-    }
-]
+def benchmark(req_idx: int) -> dict | None:
+    try:
+        return _benchmark(req_idx)
+    except Exception as e:
+        print(f"[Request {req_idx:2d}] FAILED: {e}")
+        return None
 
-# --- 1st call: model decides to request a tool call ---
-resp = client.chat.completions.create(
-    model="google/gemma-4-e4b",
-    messages=messages,
-    tools=tools,
-)
 
-msg = resp.choices[0].message
-messages.append(msg)  # keep the assistant's tool-call turn in history
+def _benchmark(req_idx: int) -> dict:
+    start = time.perf_counter()
+    first_token_time = None
+    text_parts = []
+    usage = None
 
-if msg.tool_calls:
-    for call in msg.tool_calls:
-        fn_name = call.function.name
-        args = json.loads(call.function.arguments)  # arguments come back as a JSON string
-        print(f"Model requested: {fn_name}({args})")
-
-        result = available_tools[fn_name](**args)  # YOU run the real function
-        print(f"Local result: {result}")
-
-        # --- send the result back as a tool message ---
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": call.id,
-                "content": str(result),
-            }
-        )
-
-    # --- 2nd call: model turns the tool result into a final answer ---
-    final = client.chat.completions.create(
-        model="google/gemma-4-e4b",
-        messages=messages,
-        tools=tools,
+    stream = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": PROMPT}],
+        max_tokens=1024,
+        temperature=0.7,
+        stream=True,
+        stream_options={"include_usage": True},  # LM Studio returns token usage in the final chunk
     )
-    print("Final answer:", final.choices[0].message.content)
-else:
-    print("No tool call. Direct answer:", msg.content)
+
+    for chunk in stream:
+        if chunk.usage:
+            usage = chunk.usage
+        if chunk.choices and chunk.choices[0].delta.content:
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+            text_parts.append(chunk.choices[0].delta.content)
+
+    end = time.perf_counter()
+
+    total_time = end - start
+    ttft = (first_token_time - start) if first_token_time else 0.0
+
+    if usage:
+        completion_tokens = usage.completion_tokens
+        prompt_tokens = usage.prompt_tokens
+    else:
+        # fallback: rough estimate if server doesn't report usage
+        completion_tokens = int(len("".join(text_parts)) / 4)
+        prompt_tokens = -1
+
+    tps = completion_tokens / total_time if total_time > 0 else 0.0
+
+    print(
+        f"[Request {req_idx:2d}] prompt={prompt_tokens} completion={completion_tokens} "
+        f"ttft={ttft:.2f}s total={total_time:.2f}s tps={tps:.2f}"
+    )
+
+    return {"tokens": completion_tokens, "total_time": total_time, "tps": tps, "ttft": ttft}
+
+
+if __name__ == "__main__":
+    wall_start = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
+        results = [r for r in pool.map(benchmark, range(1, CONCURRENCY + 1)) if r]
+    wall_time = time.perf_counter() - wall_start
+
+    if not results:
+        raise SystemExit("All requests failed.")
+
+    total_tokens = sum(r["tokens"] for r in results)
+    avg_ttft = sum(r["ttft"] for r in results) / len(results)
+    avg_req_tps = sum(r["tps"] for r in results) / len(results)
+
+    print()
+    print("=== Summary ===")
+    print(f"Concurrent requests:    {CONCURRENCY} ({len(results)} succeeded)")
+    print(f"Total tokens:           {total_tokens}")
+    print(f"Wall time:              {wall_time:.2f} s")
+    print(f"Avg time to 1st token:  {avg_ttft:.2f} s")
+    print(f"Avg per-request tok/s:  {avg_req_tps:.2f}")
+    print(f"Aggregate tok/s:        {total_tokens / wall_time:.2f}")
