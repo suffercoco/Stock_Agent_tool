@@ -5,7 +5,8 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://192.168.0.100:1234/v1", api_key="lm-studio")
 
-MODEL = "google/gemma-4-26b-a4b-it"
+MODEL = "gemma-4-26b-a4b-it"
+# MODEL = "gemma-4-e4b-it"
 PROMPT = "Write a detailed 500-word essay about the history of computers."
 CONCURRENCY = 10
 

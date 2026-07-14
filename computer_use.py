@@ -11,7 +11,7 @@ step 3: check the current time first -- a slot can only be captured after it has
         increasing within each group) but of unknown length; when the OCR'd
         code sorts lower than the previous one the list has wrapped, the lap
         is complete and we move on to the next slot.
-Step 4: run the screenshot through RapidOCR and pull the two numbers that follow
+Step 4: run the screenshot through MinerU's OCR and pull the two numbers that follow
         the labels 主力净买额 (net buy, normalized to 万) and 占成交额比 (turnover ratio %).
 step 5: save those two numbers keyed by the OCR'd stock number as a row in the
         database
@@ -24,9 +24,10 @@ import sqlite3
 import time
 from datetime import datetime, time as dtime
 
+import cv2
 import numpy as np
 import pyautogui as gui
-from rapidocr_onnxruntime import RapidOCR
+from mineru.model.ocr.pytorch_paddle import PytorchPaddleOCR
 
 # --------------------------------------------------------------------------- #
 # Config  -- fill these in for your screen / setup
@@ -91,9 +92,20 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# step 4: local OCR engine (RapidOCR, ONNXRuntime backend). Instantiated once
-# and reused for every screenshot.
-ocr_engine = RapidOCR()
+# step 4: local OCR engine (MinerU's PaddleOCR-in-PyTorch port). Instantiated
+# once and reused for every screenshot; models auto-download on first run.
+ocr_engine = PytorchPaddleOCR(lang="ch")
+
+
+def ocr_text(image):
+    """OCR a PIL screenshot with MinerU, joining the lines in reading order.
+
+    MinerU's engine expects a BGR numpy array and returns, per image,
+    a list of [box, (text, score)] -- or None when nothing is found.
+    """
+    bgr = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    result = ocr_engine.ocr(bgr)[0]
+    return " ".join(line[1][0] for line in result) if result else ""
 
 # step 5: sqlite database file.
 DB_PATH = "stoch_data.db"
@@ -218,8 +230,7 @@ class get_data:
         attempts = []
         for _ in range(retries):
             shot = gui.screenshot(region=STOCK_NUMBER_REGION)
-            result, _ = ocr_engine(np.asarray(shot))
-            text = " ".join(line[1] for line in result) if result else ""
+            text = ocr_text(shot)
             m = STOCK_NUMBER_RE.search(text)
             if m:
                 return m.group(0)
@@ -242,13 +253,9 @@ class get_data:
 
     # --- step 4: OCR the screenshot, pull the two labelled numbers --------- #
     def step4(self, image):
-        # RapidOCR takes a numpy array (RGB). pyautogui returns a PIL image.
-        result, _ = ocr_engine(np.asarray(image))
-
-        # result is a list of [box, text, score]; None when nothing is found.
         # Join the recognized text boxes (reading order) so a label and the
         # number next to it land in the same string for the regexes below.
-        text = " ".join(line[1] for line in result) if result else ""
+        text = ocr_text(image)
 
         net_buy = self._parse_net_buy(text)
         turnover_ratio = self._parse_ratio(text)
