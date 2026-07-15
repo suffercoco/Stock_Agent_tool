@@ -3,9 +3,13 @@ name = "stoch-agent-tool"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 dependencies = [
+    "mineru[pipeline]>=3.4.4",
+    "numpy>=2.0.0",
     "openai>=2.41.0",
     "pyautogui>=0.9.54",
     "pygetwindow>=0.0.9",
+    "rapidocr-onnxruntime>=1.4.0",
+    "smbprotocol>=1.16.1",
 ]
