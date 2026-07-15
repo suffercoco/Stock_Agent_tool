@@ -1,9 +1,15 @@
 """
-Upload stoch_data.db and stoch_levels.db to the NAS over SMB (via the
-Tailscale network).
+Upload stoch_data.db and stoch_levels.db to the NAS (via the Tailscale
+network).
 
 The PC (100.64.0.5) and the NAS (100.64.0.1) are on the same tailnet, so the
 NAS is reached directly by its Tailscale IP -- no port forwarding needed.
+
+Two transfer protocols are supported, chosen with PROTOCOL below (or the
+STOCH_NAS_PROTOCOL environment variable):
+
+    "smb" -- Windows file sharing; needs the smbclient package
+    "ftp" -- plain FTP; stdlib only, enable the FTP service on the NAS first
 
 Before uploading, the live sqlite file is snapshotted with sqlite's backup API
 so the copy is consistent even if computer_use.py is writing at the same time.
@@ -14,13 +20,12 @@ environment variables), then run:
     uv run upload_to_nas.py
 """
 
+import ftplib
 import os
 import sqlite3
 import tempfile
 from datetime import datetime
 from pathlib import Path
-
-import smbclient
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -38,14 +43,22 @@ PLAIN_PATHS = [
     Path(__file__).parent / "dashboard.html",
 ]
 
+# "smb" or "ftp"
+PROTOCOL = os.environ.get("STOCH_NAS_PROTOCOL", "ftp").strip().lower()
+
 NAS_IP = "100.64.0.1"
-# Name of the shared folder on the NAS, e.g. "home" or "stoch" on a Synology.
+# SMB: name of the shared folder on the NAS, e.g. "home" or "stoch" on a
+#      Synology -- the share name only, not a filesystem path.
+# FTP: first folder under the FTP root (on a Synology the shares show up
+#      there under the same names); "" if uploading relative to the FTP root.
 NAS_SHARE = os.environ.get("STOCH_NAS_SHARE", "share")
 # Folder inside the share to upload into ("" = the share's root).
 NAS_REMOTE_DIR = os.environ.get("STOCH_NAS_DIR", "stoch_data")
 
 NAS_USERNAME = os.environ.get("STOCH_NAS_USER", "username")
 NAS_PASSWORD = os.environ.get("STOCH_NAS_PASSWORD", "password")
+
+FTP_PORT = int(os.environ.get("STOCH_NAS_FTP_PORT", "21"))
 
 # Each upload is saved under a dated name (stoch_data_2026-07-04.db) so a day's
 # capture is never overwritten by the next day's run.
@@ -66,66 +79,106 @@ def snapshot_db(db_path):
     return Path(tmp_path)
 
 
-def remote_path(db_path):
-    name = db_path.name
+def remote_filename(db_path):
     if DATED_COPIES:
-        stem, ext = db_path.stem, db_path.suffix
-        name = f"{stem}_{datetime.now():%Y-%m-%d}{ext}"
-    parts = [rf"\\{NAS_IP}\{NAS_SHARE}"]
+        return f"{db_path.stem}_{datetime.now():%Y-%m-%d}{db_path.suffix}"
+    return db_path.name
+
+
+def remote_dir_parts():
+    """Folders between the server root and the uploaded files, outermost first."""
+    parts = []
+    if NAS_SHARE:
+        parts.append(NAS_SHARE)
     if NAS_REMOTE_DIR:
-        parts.append(NAS_REMOTE_DIR)
-    parts.append(name)
-    return "\\".join(parts)
+        parts.extend(p for p in NAS_REMOTE_DIR.replace("\\", "/").split("/") if p)
+    return parts
 
 
-def upload_one(db_path):
-    target = remote_path(db_path)
-    snapshot = snapshot_db(db_path)
+# --------------------------------------------------------------------------- #
+# SMB backend
+# --------------------------------------------------------------------------- #
+def upload_all_smb(jobs):
+    # imported here so FTP mode works without the smbclient package installed
+    import smbclient
+
+    smbclient.ClientConfig(username=NAS_USERNAME, password=NAS_PASSWORD)
+
+    remote_dir = "\\".join([rf"\\{NAS_IP}", *remote_dir_parts()])
+    if NAS_REMOTE_DIR:
+        smbclient.makedirs(remote_dir, exist_ok=True)
+
+    for local_path, name in jobs:
+        target = f"{remote_dir}\\{name}"
+        with open(local_path, "rb") as src, smbclient.open_file(target, "wb") as dst:
+            while chunk := src.read(1024 * 1024):
+                dst.write(chunk)
+        print(f"uploaded {name} -> {target}")
+
+
+# --------------------------------------------------------------------------- #
+# FTP backend
+# --------------------------------------------------------------------------- #
+def upload_all_ftp(jobs):
+    ftp = ftplib.FTP()
+    ftp.connect(NAS_IP, FTP_PORT, timeout=60)
+    ftp.login(NAS_USERNAME, NAS_PASSWORD)
     try:
-        copy_to_nas(snapshot, target)
+        for part in remote_dir_parts():
+            try:
+                ftp.mkd(part)
+            except ftplib.error_perm:
+                # already exists (or not allowed -- the cwd below will fail then)
+                pass
+            ftp.cwd(part)
+
+        remote_dir = "/".join(remote_dir_parts())
+        for local_path, name in jobs:
+            with open(local_path, "rb") as src:
+                ftp.storbinary(f"STOR {name}", src, blocksize=1024 * 1024)
+            print(f"uploaded {name} -> ftp://{NAS_IP}/{remote_dir}/{name}")
     finally:
-        snapshot.unlink()
-
-    print(f"uploaded {db_path.name} -> {target}")
+        ftp.quit()
 
 
-def upload_plain(path):
-    """Upload a non-database file as-is, under its own (undated) name."""
-    parts = [rf"\\{NAS_IP}\{NAS_SHARE}"]
-    if NAS_REMOTE_DIR:
-        parts.append(NAS_REMOTE_DIR)
-    parts.append(path.name)
-    target = "\\".join(parts)
-    copy_to_nas(path, target)
-    print(f"uploaded {path.name} -> {target}")
-
-
-def copy_to_nas(local_path, target):
-    with open(local_path, "rb") as src, smbclient.open_file(target, "wb") as dst:
-        while chunk := src.read(1024 * 1024):
-            dst.write(chunk)
+# --------------------------------------------------------------------------- #
+# Main
+# --------------------------------------------------------------------------- #
+UPLOADERS = {
+    "smb": upload_all_smb,
+    "ftp": upload_all_ftp,
+}
 
 
 def upload():
+    uploader = UPLOADERS.get(PROTOCOL)
+    if uploader is None:
+        raise ValueError(
+            f"PROTOCOL must be one of {sorted(UPLOADERS)}, got {PROTOCOL!r}"
+        )
+
     existing = [p for p in DB_PATHS if p.exists()]
     if not existing:
         raise FileNotFoundError(f"no databases found: {[str(p) for p in DB_PATHS]}")
     for missing in set(DB_PATHS) - set(existing):
         print(f"skipping {missing.name}: not found")
 
-    smbclient.ClientConfig(username=NAS_USERNAME, password=NAS_PASSWORD)
-
-    if NAS_REMOTE_DIR:
-        smbclient.makedirs(rf"\\{NAS_IP}\{NAS_SHARE}\{NAS_REMOTE_DIR}", exist_ok=True)
-
+    # (local file to send, remote file name, delete local copy afterwards)
+    jobs = []
     for db_path in existing:
-        upload_one(db_path)
-
+        jobs.append((snapshot_db(db_path), remote_filename(db_path), True))
     for path in PLAIN_PATHS:
         if path.exists():
-            upload_plain(path)
+            jobs.append((path, path.name, False))
         else:
             print(f"skipping {path.name}: not found")
+
+    try:
+        uploader([(local, name) for local, name, _ in jobs])
+    finally:
+        for local, _, is_snapshot in jobs:
+            if is_snapshot:
+                local.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
