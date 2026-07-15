@@ -18,3 +18,9 @@ dist/
 # Secrets / local env
 .env
 .env.*
+
+# Local data / scratch files, never committed
+*.log
+*.txt
+dashboard.html
+test.py
