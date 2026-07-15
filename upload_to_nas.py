@@ -32,8 +32,6 @@ from pathlib import Path
 # --------------------------------------------------------------------------- #
 DB_PATHS = [
     Path(__file__).parent / "stoch_data.db",
-    # levels db produced by classify_levels.py
-    Path(__file__).parent / "stoch_levels.db",
 ]
 
 # Plain files uploaded as-is under a stable (never dated) name, so the NAS
