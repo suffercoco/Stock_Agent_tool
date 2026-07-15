@@ -49,7 +49,7 @@ NAS_PASSWORD = os.environ.get("STOCH_NAS_PASSWORD", "password")
 
 # Each upload is saved under a dated name (stoch_data_2026-07-04.db) so a day's
 # capture is never overwritten by the next day's run.
-DATED_COPIES = True
+DATED_COPIES = False
 
 
 def snapshot_db(db_path):
