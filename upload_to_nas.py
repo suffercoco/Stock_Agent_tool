@@ -132,8 +132,17 @@ def upload_all_ftp(jobs):
 
         remote_dir = "/".join(remote_dir_parts())
         for local_path, name in jobs:
+            # upload under a temp name, then rename: the swap is atomic, so a
+            # reader never sees a half-written file
+            tmp_name = f"{name}.part"
             with open(local_path, "rb") as src:
-                ftp.storbinary(f"STOR {name}", src, blocksize=1024 * 1024)
+                ftp.storbinary(f"STOR {tmp_name}", src, blocksize=1024 * 1024)
+            try:
+                ftp.rename(tmp_name, name)
+            except ftplib.error_perm:
+                # some servers refuse to rename onto an existing file
+                ftp.delete(name)
+                ftp.rename(tmp_name, name)
             print(f"uploaded {name} -> ftp://{NAS_IP}/{remote_dir}/{name}")
     finally:
         ftp.quit()
