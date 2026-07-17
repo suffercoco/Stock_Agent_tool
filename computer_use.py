@@ -23,6 +23,7 @@ import re
 import sqlite3
 import time
 from datetime import datetime, time as dtime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -81,7 +82,7 @@ SWITCH_DELAY = 1.0
 MAX_CONSECUTIVE_OCR_MISSES = 10
 
 # Failures and progress go to this file as well as the console.
-LOG_PATH = "computer_use.log"
+LOG_PATH = str(Path(__file__).parent / "computer_use.log") 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
@@ -108,7 +109,7 @@ def ocr_text(image):
     return " ".join(line[1][0] for line in result) if result else ""
 
 # step 5: sqlite database file.
-DB_PATH = "stoch_data.db"
+DB_PATH = str(Path(__file__).parent / "stoch_data.db")
 
 # step 4: the two labels we care about and the value that follows each.
 #   主力净买额 -> a 净买额 in 万 / 亿  (stored normalized to 万)
