@@ -38,16 +38,24 @@ START_COORD = (547, 41)
 
 # step 3: the coordinate to move to for each 30-minute slot.
 # The market breaks for lunch 11:30 -> 13:00, and slots are labelled by their
-# end time, so the tradable slots are the 8 below. The app shows only these
-# columns (no lunch columns), so their x-positions are consecutive on screen.
-X_COORDINATION_SHIFT = 164
+# end time, so the tradable slots are the 8 below. Each slot's x-position is
+# set manually; y is the shared SLOT_Y.
 SLOT_Y = 390
-SLOT_TIMES = ("10:00", "10:30", "11:00", "11:30", "13:30", "14:00", "14:30", "15:00")
-# Only these slots are captured; the others still anchor the column x-positions.
+SLOT_X = {
+    "10:00": 235,
+    "10:30": 413,
+    "11:00": 577,
+    "11:30": 741,
+    "13:30": 905,
+    "14:00": 1069,
+    "14:30": 1233,
+    "15:00": 1305,
+}
+# Only these slots are captured; the others are listed for completeness.
 CAPTURE_SLOTS = ("15:00")
 SLOT_COORDS = {
-    slot: (249 + X_COORDINATION_SHIFT * i, SLOT_Y)
-    for i, slot in enumerate(SLOT_TIMES)
+    slot: (x, SLOT_Y)
+    for slot, x in SLOT_X.items()
     if slot in CAPTURE_SLOTS
 }
 
@@ -58,7 +66,7 @@ SCREENSHOT_REGION = (100, 662, 269, 23)
 NEXT_STOCK_COORD = (125, 61)
 
 # step 3: the area showing the current stock number -> (left, top, width, height)
-STOCK_NUMBER_REGION = (1627, 79, 59, 25) 
+STOCK_NUMBER_REGION = (1522, 79, 58, 20) 
 
 # The list is ordered: prefix groups appear as 60, 68, 00, 30, 92, and codes
 # increase within each group. How many stocks the list holds is unknown, so the
