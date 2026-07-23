@@ -118,8 +118,8 @@
   .grid-ln { stroke: var(--grid); stroke-width: 1; }
   .base-ln { stroke: var(--baseline); stroke-width: 1; }
 
-  /* heatmap */
-  .hm-scroll { overflow-x: auto; }
+  /* heatmap — all notched stocks, scrolling vertically inside the card */
+  .hm-scroll { overflow-x: auto; overflow-y: auto; max-height: 560px; }
   .hm { display: grid; gap: 2px; font-variant-numeric: tabular-nums; min-width: 640px; }
   .hm .rowlbl {
     font-size: 11px; color: var(--ink-2); display: flex; align-items: center;
@@ -128,6 +128,10 @@
   .hm .collbl {
     font-size: 10.5px; color: var(--muted); text-align: center; padding-bottom: 2px;
     white-space: nowrap; cursor: pointer; border-radius: 4px;
+  }
+  /* date headers (and their corner spacer) stay visible while the rows scroll */
+  .hm .collbl, .hm .corner {
+    position: sticky; top: 0; z-index: 1; background: var(--surface);
   }
   .hm .collbl:hover { color: var(--ink); }
   .hm .collbl.sel { color: var(--ink); font-weight: 600; background: var(--select-band); }
@@ -285,9 +289,8 @@ const I18N = {
     levelShort: lv => "Level " + lv,
     totalNotched: "Total notched",
     hmTitle: "Who is notching, and for how long",
-    hmSub: "Stocks that reached level 1+ at least once in the window, one row each, sorted by notch days. Runs of dark cells are sustained main-force activity; isolated cells are one-day spikes. Hollow cells mean no reading that day.",
+    hmSub: "Every stock that reached level 1+ at least once in the window, one row each, sorted by notch days — scroll inside the panel to see them all. Runs of dark cells are sustained main-force activity; isolated cells are one-day spikes. Hollow cells mean no reading that day.",
     hmNone: "No stock notched in this window.",
-    hmCapped: (extra, cap) => `${extra} more stocks notched at least once; rows are capped at ${cap} by notch days — the table below keeps every value reachable.`,
     hmAll: (n, total) => `${n} of ${total} tracked stocks notched at least once in this window.`,
     noReading: "no reading",
     notch: "Notch",
@@ -324,9 +327,8 @@ const I18N = {
     levelShort: lv => ["", "一档", "二档", "三档"][lv],
     totalNotched: "达档合计",
     hmTitle: "哪些股票在达档、持续多久",
-    hmSub: "统计窗口内至少达档一次的股票，每行一只，按达档天数排序。连续的深色格子表示主力持续活跃；孤立格子是单日脉冲；空心格子表示当日无数据。",
+    hmSub: "统计窗口内所有至少达档一次的股票，每行一只，按达档天数排序——在面板内滚动可查看全部。连续的深色格子表示主力持续活跃；孤立格子是单日脉冲；空心格子表示当日无数据。",
     hmNone: "窗口内没有股票达档。",
-    hmCapped: (extra, cap) => `另有 ${extra} 只股票至少达档一次；按达档天数仅显示前 ${cap} 行——全部数值可在下方表格中查看。`,
     hmAll: (n, total) => `窗口内共有 ${n}/${total} 只跟踪股票至少达档一次。`,
     noReading: "无数据",
     notch: "档位",
@@ -571,14 +573,13 @@ const notchedRows = stocks
   .filter(r => r.notchDays > 0)
   .sort((a, b) => b.notchDays - a.notchDays || b.maxR - a.maxR);
 
-const HM_MAX_ROWS = 40;
-
 function renderHeatmap() {
   const hm = document.getElementById("heatmap");
   hm.replaceChildren();
   hm.style.gridTemplateColumns = `64px repeat(${days.length}, minmax(16px, 1fr))`;
 
   const corner = document.createElement("div");
+  corner.className = "corner";
   hm.appendChild(corner);
   for (let d = 0; d < days.length; d++) {
     const h = document.createElement("div");
@@ -589,8 +590,7 @@ function renderHeatmap() {
     hm.appendChild(h);
   }
 
-  const shown = notchedRows.slice(0, HM_MAX_ROWS);
-  for (const row of shown) {
+  for (const row of notchedRows) {
     const lbl = document.createElement("div");
     lbl.className = "rowlbl"; lbl.textContent = row.code;
     hm.appendChild(lbl);
@@ -621,13 +621,9 @@ function renderHeatmap() {
   }
 
   const more = document.getElementById("hmMore");
-  if (!notchedRows.length) {
-    more.textContent = t().hmNone;
-  } else if (notchedRows.length > HM_MAX_ROWS) {
-    more.textContent = t().hmCapped(notchedRows.length - HM_MAX_ROWS, HM_MAX_ROWS);
-  } else {
-    more.textContent = t().hmAll(notchedRows.length, stocks.length);
-  }
+  more.textContent = notchedRows.length
+    ? t().hmAll(notchedRows.length, stocks.length)
+    : t().hmNone;
 
   const leg = document.getElementById("hmLegend");
   leg.replaceChildren();
