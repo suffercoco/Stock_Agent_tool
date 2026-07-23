@@ -43,12 +43,12 @@ START_COORD = (547, 41)
 SLOT_Y = 390
 SLOT_X = {
     "10:00": 235,
-    "10:30": 413,
-    "11:00": 577,
-    "11:30": 741,
-    "13:30": 905,
-    "14:00": 1069,
-    "14:30": 1233,
+    "10:30": 388,
+    "11:00": 541,
+    "11:30": 694,
+    "13:30": 846,
+    "14:00": 999,
+    "14:30": 1152,
     "15:00": 1305,
 }
 # Only these slots are captured; the others are listed for completeness.
@@ -320,6 +320,7 @@ def plus(a, b):
 
 
 if __name__ == "__main__":
+    time.sleep(20)
     job = get_data()
     try:
         job.run()
