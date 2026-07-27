@@ -79,6 +79,12 @@
     border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
   }
   .filter-row select:focus-visible { outline: 2px solid var(--l2); outline-offset: 1px; }
+  .filter-row input[type="search"] {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px;
+    width: 120px; font-variant-numeric: tabular-nums;
+  }
+  .filter-row input[type="search"]:focus-visible { outline: 2px solid var(--l2); outline-offset: 1px; }
   .filter-hint { color: var(--muted); font-size: 12.5px; }
 
   .lang-switch {
@@ -105,6 +111,7 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 10px;
   }
+  .card[hidden] { display: none; }
   .card h2 { font-size: 15px; font-weight: 600; margin: 0; }
   .card .sub { color: var(--ink-2); font-size: 12.5px; margin: -6px 0 0; }
 
@@ -123,8 +130,10 @@
   .hm { display: grid; gap: 2px; font-variant-numeric: tabular-nums; min-width: 640px; }
   .hm .rowlbl {
     font-size: 11px; color: var(--ink-2); display: flex; align-items: center;
-    padding-right: 8px; justify-content: flex-end;
+    padding-right: 8px; justify-content: flex-end; cursor: pointer; border-radius: 4px;
   }
+  .hm .rowlbl:hover { color: var(--ink); }
+  .hm .rowlbl.selrow { color: var(--ink); font-weight: 600; background: var(--select-band); }
   .hm .collbl {
     font-size: 10.5px; color: var(--muted); text-align: center; padding-bottom: 2px;
     white-space: nowrap; cursor: pointer; border-radius: 4px;
@@ -155,6 +164,9 @@
   .chip .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
   .neg { color: var(--outflow); }
   .pos { color: var(--inflow); }
+
+  #stockTable tbody tr { cursor: pointer; }
+  #stockTable tbody tr:hover td, #stockTable tbody tr.sel td { background: var(--select-band); }
 
   #tooltip {
     position: fixed; z-index: 10; pointer-events: none; display: none;
@@ -189,6 +201,10 @@
   <div class="filter-row">
     <label for="daySel" id="dayLbl"></label>
     <select id="daySel"></select>
+    <label for="codeSearch" id="searchLbl"></label>
+    <input type="search" id="codeSearch" list="codeList" autocomplete="off" spellcheck="false" enterkeyhint="search">
+    <datalist id="codeList"></datalist>
+    <span class="filter-hint" id="searchMsg"></span>
     <span class="filter-hint" id="filterHint"></span>
     <div class="lang-switch" id="langSwitch" role="group" aria-label="Language / 语言">
       <button type="button" data-lang="en">EN</button>
@@ -197,6 +213,19 @@
   </div>
 
   <div class="kpis" id="kpis"></div>
+
+  <section class="card" id="stockCard" hidden>
+    <h2 id="stockCardTitle"></h2>
+    <p class="sub" id="stockCardSub"></p>
+    <div style="overflow-x:auto">
+      <table id="stockTable">
+        <thead>
+          <tr><th id="sthDay"></th><th class="num" id="sthRatio"></th><th id="sthLevel"></th><th class="num" id="sthNb"></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
 
   <section class="card">
     <h2 id="stackTitle"></h2>
@@ -296,13 +325,19 @@ const I18N = {
     notch: "Notch",
     belowTh: () => `below ${TH[0]}%`,
     scatterTitle: "Selected day: ratio vs. net buy",
-    scatterSub: d => `Every tracked stock on ${d}. Right of the zero line, the main force bought; height is the turnover share. Hairlines mark the notch thresholds.`,
+    scatterSub: d => `Every tracked stock on ${d}. Right of the zero line, the main force bought; height is the turnover share. The net-buy axis is log-scaled on both sides of zero so the thousands of small readings stay spread out instead of stacking at the zero line. Hairlines mark the notch thresholds.`,
     scatterAria: "Scatter of net buy versus turnover ratio for the selected day",
     inflow: "Net inflow", outflow: "Net outflow",
     tableTitle: d => "Top notched stocks · " + d,
     tableSub: "Table twin of the charts — the same values, readable without hovering.",
     thCode: "Code", thLevel: "Level", thRatio: "占成交额比", thNb: "主力净买额",
     tableEmpty: "No stock notched on this day.",
+    searchLbl: "Stock code",
+    searchPh: "e.g. 600036",
+    searchNone: c => `${c} is not in the watch list`,
+    stockCardTitle: (c, n, total) => `${c} · notched ${n} of ${total} days`,
+    stockCardSub: "Every captured reading for this stock in the window — click a row to focus that trading day across all panels.",
+    sthDay: "Date",
     dayShort: d => (d.getMonth() + 1) + "/" + d.getDate(),
   },
   zh: {
@@ -334,13 +369,19 @@ const I18N = {
     notch: "档位",
     belowTh: () => `低于 ${TH[0]}%`,
     scatterTitle: "选定交易日：占比 vs. 净买额",
-    scatterSub: d => `${d} 全部跟踪股票。零线右侧为主力净买入；纵轴为占成交额比；虚线为各档位阈值。`,
+    scatterSub: d => `${d} 全部跟踪股票。零线右侧为主力净买入；纵轴为占成交额比；横轴为零点两侧的对数刻度，避免个别大额个股把成千上万的小额读数挤在零线上；虚线为各档位阈值。`,
     scatterAria: "选定交易日净买额与占成交额比散点图",
     inflow: "净流入", outflow: "净流出",
     tableTitle: d => "达档股票排行 · " + d,
     tableSub: "与图表对应的数据表——同样的数值，无需悬停即可查看。",
     thCode: "代码", thLevel: "档位", thRatio: "占成交额比", thNb: "主力净买额",
     tableEmpty: "当日没有股票达档。",
+    searchLbl: "股票代码",
+    searchPh: "如 600036",
+    searchNone: c => `自选列表中没有 ${c}`,
+    stockCardTitle: (c, n, total) => `${c} · ${total} 个交易日中达档 ${n} 天`,
+    stockCardSub: "该股票在窗口内的全部读数——点击任意行，所有面板联动到该交易日。",
+    sthDay: "日期",
     dayShort: d => (d.getMonth() + 1) + "月" + d.getDate() + "日",
   },
 };
@@ -371,6 +412,14 @@ function applyLang() {
   setText("metaLine", t().meta());
   setText("dayLbl", t().dayLbl);
   setText("filterHint", t().filterHint);
+  setText("searchLbl", t().searchLbl);
+  document.getElementById("codeSearch").placeholder = t().searchPh;
+  document.getElementById("searchMsg").textContent = "";
+  setText("stockCardSub", t().stockCardSub);
+  setText("sthDay", t().sthDay);
+  setText("sthRatio", t().thRatio);
+  setText("sthLevel", t().thLevel);
+  setText("sthNb", t().thNb);
   setText("stackTitle", t().stackTitle);
   setText("stackSub", t().stackSub);
   setText("hmTitle", t().hmTitle);
@@ -396,6 +445,8 @@ document.querySelectorAll("#langSwitch button").forEach(b =>
 /* ---------------- shared state + tooltip ---------------- */
 
 let selDay = days.length - 1;    /* open on the latest capture */
+let selStock = -1;               /* index into stocks, set from the search box */
+const stockIndex = new Map(stocks.map((c, i) => [c, i]));
 const tooltip = document.getElementById("tooltip");
 
 function showTooltip(x, y, build) {
@@ -573,9 +624,26 @@ const notchedRows = stocks
   .filter(r => r.notchDays > 0)
   .sort((a, b) => b.notchDays - a.notchDays || b.maxR - a.maxR);
 
+const hmRowLbls = new Map();     /* stock index -> row label element */
+
+function highlightHeatmap() {
+  let target = null;
+  for (const [s, el] of hmRowLbls) {
+    const on = s === selStock;
+    el.classList.toggle("selrow", on);
+    if (on) target = el;
+  }
+  if (target) {
+    const scroller = document.querySelector(".hm-scroll");
+    const dy = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += dy - scroller.clientHeight / 2;
+  }
+}
+
 function renderHeatmap() {
   const hm = document.getElementById("heatmap");
   hm.replaceChildren();
+  hmRowLbls.clear();
   hm.style.gridTemplateColumns = `64px repeat(${days.length}, minmax(16px, 1fr))`;
 
   const corner = document.createElement("div");
@@ -592,7 +660,14 @@ function renderHeatmap() {
 
   for (const row of notchedRows) {
     const lbl = document.createElement("div");
-    lbl.className = "rowlbl"; lbl.textContent = row.code;
+    lbl.className = "rowlbl" + (row.s === selStock ? " selrow" : "");
+    lbl.textContent = row.code;
+    lbl.addEventListener("click", () => {
+      document.getElementById("codeSearch").value = row.code;
+      document.getElementById("searchMsg").textContent = "";
+      setStock(row.s);
+    });
+    hmRowLbls.set(row.s, lbl);
     hm.appendChild(lbl);
     for (let d = 0; d < days.length; d++) {
       const v = ratio[row.s][d];
@@ -640,19 +715,25 @@ function renderHeatmap() {
 /* ---------------- scatter: selected day, net buy vs ratio ---------------- */
 
 function renderScatter() {
-  const W = 520, H = 340, mL = 36, mR = 14, mT = 12, mB = 30;
+  const W = 520, H = 340, mL = 36, mR = 14, mT = 12, mB = 36;
   const plotW = W - mL - mR, plotH = H - mT - mB;
 
   const pts = [];
   for (let s = 0; s < stocks.length; s++) {
     const r = ratio[s][selDay], nb = netBuy[s][selDay];
     if (r == null || nb == null) continue;
-    pts.push({ code: stocks[s], x: nb, y: r });
+    pts.push({ s, code: stocks[s], x: nb, y: r });
   }
-  const maxAbs = Math.max(1, ...pts.map(p => Math.abs(p.x))) * 1.08;
+  /* symmetric log x — on a linear axis one 亿-scale outlier crushes the
+     thousands of small readings into a single stripe at the zero line */
+  const LINTH = 100;   /* 万; |net buy| below this stays ~linear around zero */
+  const slog = v => Math.sign(v) * Math.log10(1 + Math.abs(v) / LINTH);
+  const maxAbs = Math.max(1000, ...pts.map(p => Math.abs(p.x)));
+  const maxT = slog(maxAbs) * 1.04;
   const maxY = Math.max(TH[2] + 2, ...pts.map(p => p.y * 1.1));
-  const X = v => mL + ((v + maxAbs) / (2 * maxAbs)) * plotW;
+  const X = v => mL + ((slog(v) + maxT) / (2 * maxT)) * plotW;
   const Y = v => mT + plotH - (v / maxY) * plotH;
+  for (const p of pts) { p.px = X(p.x); p.py = Y(p.y); }
 
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, width: "100%", role: "img",
     "aria-label": t().scatterAria });
@@ -673,32 +754,49 @@ function renderScatter() {
     txt.textContent = "L" + lv;
     svg.appendChild(txt);
   }
-  svg.appendChild(svgEl("line", { x1: X(0), x2: X(0), y1: mT, y2: mT + plotH, class: "base-ln" }));
-  for (const v of [-maxAbs * 0.75, 0, maxAbs * 0.75]) {
-    const txt = svgEl("text", { x: X(v), y: H - 10, "text-anchor": "middle", class: "axis-txt" });
-    txt.textContent = v === 0 ? "0" : (v > 0 ? "+" : "-") + (Math.abs(v) >= 10000 ? (Math.abs(v) / 10000).toFixed(1) + "亿" : Math.round(Math.abs(v)) + "万");
-    svg.appendChild(txt);
+  /* x ticks at decade steps mirrored around zero */
+  for (let v = 1000; v <= maxAbs; v *= 10) {
+    for (const tv of [v, -v]) {
+      svg.appendChild(svgEl("line", { x1: X(tv), x2: X(tv), y1: mT, y2: mT + plotH, class: "grid-ln" }));
+      const txt = svgEl("text", { x: X(tv), y: mT + plotH + 14, "text-anchor": "middle", class: "axis-txt" });
+      txt.textContent = (tv > 0 ? "+" : "-") + (v >= 10000 ? (v / 10000) + "亿" : v + "万");
+      svg.appendChild(txt);
+    }
   }
-  const xcap = svgEl("text", { x: mL + plotW / 2, y: H - 10, "text-anchor": "middle", class: "axis-txt" });
+  svg.appendChild(svgEl("line", { x1: X(0), x2: X(0), y1: mT, y2: mT + plotH, class: "base-ln" }));
+  const zero = svgEl("text", { x: X(0), y: mT + plotH + 14, "text-anchor": "middle", class: "axis-txt" });
+  zero.textContent = "0";
+  svg.appendChild(zero);
+  const xcap = svgEl("text", { x: mL + plotW / 2, y: H - 6, "text-anchor": "middle", class: "axis-txt" });
   xcap.textContent = "主力净买额 →";
   svg.appendChild(xcap);
 
   for (const p of pts) {
-    svg.appendChild(svgEl("circle", { cx: X(p.x), cy: Y(p.y), r: 5,
-      fill: p.x >= 0 ? "var(--inflow)" : "var(--outflow)",
-      stroke: "var(--surface)", "stroke-width": 2 }));
+    svg.appendChild(svgEl("circle", { cx: p.px, cy: p.py, r: 2.5,
+      fill: p.x >= 0 ? "var(--inflow)" : "var(--outflow)", "fill-opacity": 0.45 }));
   }
   /* direct-label the top 3 by ratio, skipping labels that would collide */
   const top3 = [...pts].sort((a, b) => b.y - a.y).slice(0, 3);
   const placed = [];
   for (const p of top3) {
-    const lx = X(p.x), ly = Y(p.y);
+    const lx = p.px, ly = p.py;
     if (placed.some(q => Math.abs(q[0] - lx) < 64 && Math.abs(q[1] - ly) < 14)) continue;
     placed.push([lx, ly]);
     const anchor = lx > W - 90 ? "end" : "start";
     const txt = svgEl("text", { x: lx + (anchor === "start" ? 8 : -8), y: ly + 4,
       "text-anchor": anchor, class: "axis-txt", fill: "var(--ink-2)" });
     txt.textContent = p.code;
+    svg.appendChild(txt);
+  }
+  /* ring + label the searched stock, if it has a reading this day */
+  const selPt = selStock >= 0 ? pts.find(p => p.s === selStock) : null;
+  if (selPt) {
+    svg.appendChild(svgEl("circle", { cx: selPt.px, cy: selPt.py, r: 6,
+      fill: "none", stroke: "var(--ink)", "stroke-width": 2 }));
+    const anchor = selPt.px > W - 90 ? "end" : "start";
+    const txt = svgEl("text", { x: selPt.px + (anchor === "start" ? 10 : -10), y: selPt.py + 4,
+      "text-anchor": anchor, class: "axis-txt", fill: "var(--ink)", "font-weight": "600" });
+    txt.textContent = selPt.code;
     svg.appendChild(txt);
   }
 
@@ -712,12 +810,12 @@ function renderScatter() {
     const py = (ev.clientY - r.top) * (H / r.height);
     let best = null, bd = Infinity;
     for (const p of pts) {
-      const dx = X(p.x) - px, dy = Y(p.y) - py, dd = dx * dx + dy * dy;
+      const dx = p.px - px, dy = p.py - py, dd = dx * dx + dy * dy;
       if (dd < bd) { bd = dd; best = p; }
     }
     if (!best) return;
     if (ring) ring.remove();
-    ring = svgEl("circle", { cx: X(best.x), cy: Y(best.y), r: 8, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5 });
+    ring = svgEl("circle", { cx: best.px, cy: best.py, r: 8, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5 });
     svg.insertBefore(ring, hover);
     showTooltip(ev.clientX, ev.clientY, el => {
       tTitle(el, best.code);
@@ -780,6 +878,83 @@ function renderTable() {
   setText("tableTitle", t().tableTitle(dayFull(days[selDay])));
 }
 
+/* ---------------- stock search + per-stock detail card ---------------- */
+
+function renderStockCard() {
+  const card = document.getElementById("stockCard");
+  if (selStock < 0) { card.hidden = true; return; }
+  card.hidden = false;
+  let notchDays = 0;
+  for (let d = 0; d < days.length; d++) {
+    const v = ratio[selStock][d];
+    if (v != null && v >= TH[0]) notchDays++;
+  }
+  setText("stockCardTitle", t().stockCardTitle(stocks[selStock], notchDays, days.length));
+  const tbody = document.querySelector("#stockTable tbody");
+  tbody.replaceChildren();
+  for (let d = 0; d < days.length; d++) {
+    const v = ratio[selStock][d], nb = netBuy[selStock][d];
+    const tr = document.createElement("tr");
+    if (d === selDay) tr.className = "sel";
+    const tdD = document.createElement("td"); tdD.textContent = dayFull(days[d]);
+    const tdR = document.createElement("td"); tdR.className = "num";
+    tdR.textContent = v == null ? "—" : v.toFixed(2) + "%";
+    const tdL = document.createElement("td");
+    if (v == null) {
+      tdL.textContent = t().noReading; tdL.style.color = "var(--muted)";
+    } else {
+      const lv = levelOf(v);
+      const chip = document.createElement("span"); chip.className = "chip";
+      const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = `var(${LEVEL_VAR[lv]})`;
+      if (!lv) sw.style.border = "1px solid " + cssVar("--grid");
+      const ct = document.createElement("span");
+      ct.textContent = lv ? t().levelShort(lv) : t().belowTh();
+      chip.append(sw, ct); tdL.appendChild(chip);
+    }
+    const tdN = document.createElement("td");
+    tdN.className = "num" + (nb == null ? "" : nb >= 0 ? " pos" : " neg");
+    tdN.textContent = fmtWan(nb);
+    tr.append(tdD, tdR, tdL, tdN);
+    tr.addEventListener("click", () => setDay(d));
+    tbody.appendChild(tr);
+  }
+}
+
+function setStock(s) {
+  if (s === selStock) return;
+  selStock = s;
+  renderScatter(); renderStockCard(); highlightHeatmap();
+}
+
+const codeSearch = document.getElementById("codeSearch");
+const searchMsg = document.getElementById("searchMsg");
+{
+  const frag = document.createDocumentFragment();
+  for (const c of stocks) {
+    const o = document.createElement("option");
+    o.value = c; frag.appendChild(o);
+  }
+  document.getElementById("codeList").appendChild(frag);
+}
+codeSearch.addEventListener("input", () => {
+  const q = codeSearch.value.trim();
+  searchMsg.textContent = "";
+  if (stockIndex.has(q)) { setStock(stockIndex.get(q)); return; }
+  if (q.length >= 6) searchMsg.textContent = t().searchNone(q);
+  setStock(-1);
+});
+codeSearch.addEventListener("keydown", ev => {
+  if (ev.key !== "Enter") return;
+  const q = codeSearch.value.trim();
+  if (!q || stockIndex.has(q)) return;
+  const hits = stocks.filter(c => c.startsWith(q));
+  if (hits.length === 1) {
+    codeSearch.value = hits[0];
+    searchMsg.textContent = "";
+    setStock(stockIndex.get(hits[0]));
+  }
+});
+
 /* ---------------- day selection wiring ---------------- */
 
 const daySel = document.getElementById("daySel");
@@ -795,7 +970,7 @@ function setDay(d) {
   selDay = d;
   daySel.value = String(d);
   hideTooltip();
-  renderKpis(); renderStack(); renderHeatmap(); renderScatter(); renderTable();
+  renderKpis(); renderStack(); renderHeatmap(); renderScatter(); renderTable(); renderStockCard();
 }
 
 applyLang();
