@@ -24,3 +24,10 @@ dist/
 *.txt
 dashboard.html
 test.py
+
+# SQLite databases (incl. write-ahead log sidecars)
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
