@@ -14,7 +14,7 @@ setx STOCH_NAS_USER ""
 setx STOCH_NAS_PASSWORD ''
 ```
 # n8n
-powershell -Command "$env:STOCH_NAS_SHARE='stock'; $env:STOCH_NAS_USER=''; $env:STOCH_NAS_PASSWORD='Nm~602<#'; e:/project/Stoch_Agent_tool/.venv/Scripts/python.exe e:/project/Stoch_Agent_tool/upload_to_nas.py"
+powershell -Command "$env:STOCH_NAS_SHARE=''; $env:STOCH_NAS_USER=''; $env:STOCH_NAS_PASSWORD=''; e:/project/Stoch_Agent_tool/.venv/Scripts/python.exe e:/project/Stoch_Agent_tool/upload_to_nas.py"
 
 2. set coordination for different solution, the coordination fit 1080p solution by default. Running get_mouse_coordination.py to get you own coordination under screen solution.
 3. if data get too late when over 00:00, use change_time_slot.py to change date nto same day.
