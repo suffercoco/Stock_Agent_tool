@@ -2,7 +2,7 @@
 
 ```Shell
 # Mac command
-echo "export STOCH_NAS_SHARE='stock'" >> ~/.zshrc
+echo "export STOCH_NAS_SHARE=''" >> ~/.zshrc
 echo "export STOCH_NAS_USER=''" >> ~/.zshrc
 echo "export STOCH_NAS_PASSWORD=''" >> ~/.zshrc
 ```
@@ -11,7 +11,7 @@ echo "export STOCH_NAS_PASSWORD=''" >> ~/.zshrc
 # Windows command
 setx STOCH_NAS_SHARE "" 
 setx STOCH_NAS_USER "" 
-setx STOCH_NAS_PASSWORD 'Nm~602<#'
+setx STOCH_NAS_PASSWORD ''
 ```
 # n8n
 powershell -Command "$env:STOCH_NAS_SHARE='stock'; $env:STOCH_NAS_USER=''; $env:STOCH_NAS_PASSWORD='Nm~602<#'; e:/project/Stoch_Agent_tool/.venv/Scripts/python.exe e:/project/Stoch_Agent_tool/upload_to_nas.py"
